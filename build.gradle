@@ -4,7 +4,7 @@ plugins {
     id("org.jreleaser") version "1.21.0"
 }
 
-group 'org.mindignited'
+group 'org.kinotic'
 version '5.1.0-SNAPSHOT'
 
 sourceCompatibility = '21'
@@ -15,9 +15,9 @@ repositories {
 
 ext {
     apacheCommonsVersion='3.20.0'
-    logbackVersion='1.5.23'
+    logbackVersion='1.5.25'
     nettyVersion='4.1.115.Final'
-    vertxVersion='5.0.6'
+    vertxVersion='5.0.7'
 }
 
 
