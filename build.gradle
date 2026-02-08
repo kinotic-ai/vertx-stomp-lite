@@ -5,7 +5,7 @@ plugins {
 }
 
 group 'org.kinotic'
-version '5.1.0-SNAPSHOT'
+version '5.1.0'
 
 sourceCompatibility = '21'
 
