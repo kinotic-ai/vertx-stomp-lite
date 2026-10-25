@@ -109,9 +109,10 @@ public class FrameParser implements Handler<Buffer> {
           // End of headers.
           current = State.BODY;
           String length = headers.get(Frame.CONTENT_LENGTH);
-          if (length != null) {
-            int contentLength = Integer.parseInt(length);
-            frameParser.fixedSizeMode(contentLength);
+          // RecordParser rejects a fixed size of 0, so an empty body declared with content-length is read up to
+          // the NULL terminator like a body with no declared length
+          if (length != null && Integer.parseInt(length) > 0) {
+            frameParser.fixedSizeMode(Integer.parseInt(length));
           } else {
             frameParser.delimitedMode(NULL);
           }
