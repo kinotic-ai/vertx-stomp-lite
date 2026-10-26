@@ -104,6 +104,17 @@ public interface StompServerConnection {
     Future<Void> sendErrorAndDisconnect(Throwable throwable);
 
     /**
+     * Sends an error frame naming the client frame the server could not process, then disconnects the client per
+     * the Stomp Spec: the ERROR frame carries the {@code receipt-id} of that frame's {@code receipt} header, so the
+     * client knows which of its frames failed.
+     * @param throwable the error that occurred
+     * @param causingFrame the client frame the server could not process, or null when no frame is to blame
+     * @return a {@link Promise} that will be completed when the data is successfully sent.
+     *         Will be failed if there is a problem sending the data or the underlying TCP connection is already closed.
+     */
+    Future<Void> sendErrorAndDisconnect(Throwable throwable, Frame causingFrame);
+
+    /**
      * Pause the client from sending data. it sets the buffer in {@code fetch} mode and clears the actual demand.
      *
      * While it's paused, no data will be sent to the data {@link StompServerHandler}.

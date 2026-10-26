@@ -97,12 +97,14 @@ public class StompClientTest {
         StompClientConnection connection = connect(Collections.emptyMap());
         CompletableFuture<Frame> received = new CompletableFuture<>();
 
-        connection.subscribe("sub-1", "/queue/greetings", received::complete).await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        // with a receipt the subscription completes once the server has processed it
+        connection.subscribe("sub-1", "/queue/greetings", Map.of(Frame.RECEIPT, "s-1"), received::complete).await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
-        Frame subscribe = handler.subscribeFrames().poll(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        Frame subscribe = handler.subscribeFrames().poll();
         assertNotNull(subscribe);
         assertEquals("sub-1", subscribe.getId());
         assertEquals("/queue/greetings", subscribe.getDestination());
+        assertEquals("s-1", subscribe.getReceipt());
 
         handler.message("sub-1", "/queue/greetings", Buffer.buffer("hello"));
 
@@ -139,6 +141,37 @@ public class StompClientTest {
         Frame bodiless = handler.sendFrames().poll(TIMEOUT_SECONDS, TimeUnit.SECONDS);
         assertNotNull(bodiless);
         assertTrue(bodiless.hasEmptyBody());
+    }
+
+    @Test
+    public void errorFrameFailsTheOperationItNames() throws Exception {
+        startServer(headers -> Future.succeededFuture(Collections.emptyMap()), new StompServerOptions());
+        client = StompClient.create(vertx, new StompClientOptions());
+        StompClientConnection connection = connect(Collections.emptyMap());
+        CompletableFuture<Throwable> closeCause = new CompletableFuture<>();
+        connection.closeHandler(closeCause::complete);
+
+        Future<Void> refused = connection.send(RecordingStompServerHandler.REFUSED_DESTINATION, Map.of(Frame.RECEIPT, "r-1"), null);
+        Future<Void> other = connection.send("/queue/orders", Map.of(Frame.RECEIPT, "r-2"), null);
+
+        try {
+            refused.toCompletionStage().toCompletableFuture().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            fail("the refused send should fail");
+        } catch (ExecutionException e) {
+            assertTrue(e.getCause() instanceof StompErrorException);
+            StompErrorException error = (StompErrorException) e.getCause();
+            assertEquals("refused", error.getMessage());
+            assertEquals("r-1", error.getFrame().getHeader(Frame.RECEIPT_ID));
+        }
+        // the other send is receipted before the close or fails with it, never with the refusal
+        try {
+            other.toCompletionStage().toCompletableFuture().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (ExecutionException e) {
+            assertFalse(e.getCause() instanceof StompErrorException);
+            assertTrue(e.getCause().getCause() instanceof StompErrorException);
+        }
+        assertTrue(closeCause.get(TIMEOUT_SECONDS, TimeUnit.SECONDS) instanceof StompErrorException);
+        assertFalse(connection.isConnected());
     }
 
     @Test
@@ -179,8 +212,7 @@ public class StompClientTest {
         CompletableFuture<Frame> received = new CompletableFuture<>();
         CompletableFuture<Throwable> closeCause = new CompletableFuture<>();
         connection.closeHandler(closeCause::complete);
-        connection.subscribe("sub-1", "/queue/big", received::complete).await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
-        assertNotNull(handler.subscribeFrames().poll(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        connection.subscribe("sub-1", "/queue/big", Map.of(Frame.RECEIPT, "s-1"), received::complete).await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         handler.message("sub-1", "/queue/big", Buffer.buffer(new byte[4096]));
 

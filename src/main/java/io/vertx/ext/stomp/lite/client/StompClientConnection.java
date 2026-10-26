@@ -39,10 +39,13 @@ public interface StompClientConnection {
      *
      * @param id             the subscription id, unique on this connection
      * @param destination    the destination to subscribe to
+     * @param headers        the other headers of the frame, may be empty
      * @param messageHandler receives the MESSAGE frames of the subscription
-     * @return a future completed when the frame is written
+     * @return a future completed when the frame is written, or when the RECEIPT for the frame's {@code receipt}
+     *         header arrives; failed with the ERROR frame's {@link StompErrorException} or when the connection
+     *         closes first
      */
-    Future<Void> subscribe(String id, String destination, Handler<Frame> messageHandler);
+    Future<Void> subscribe(String id, String destination, Map<String, String> headers, Handler<Frame> messageHandler);
 
     /**
      * Sends an UNSUBSCRIBE frame and stops routing messages to the subscription's handler.
@@ -71,8 +74,10 @@ public interface StompClientConnection {
     void close();
 
     /**
-     * Sets the handler invoked with every ERROR frame the server sends. The connection closes after an ERROR
-     * frame, and the {@link #closeHandler} then receives the frame's {@link StompErrorException} as the cause.
+     * Sets the handler invoked with every ERROR frame the server sends. An ERROR frame naming a {@code receipt-id}
+     * fails the operation waiting on that receipt with the frame's {@link StompErrorException}; one naming none
+     * fails every operation waiting on a receipt. The connection closes after an ERROR frame, and the
+     * {@link #closeHandler} then receives the same exception as the cause.
      *
      * @param handler the handler
      * @return this for fluent usage

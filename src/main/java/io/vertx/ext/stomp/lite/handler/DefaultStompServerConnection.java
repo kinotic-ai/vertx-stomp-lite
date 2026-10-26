@@ -117,11 +117,21 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
 
     @Override
     public Future<Void> sendErrorAndDisconnect(Throwable throwable) {
+        return sendErrorAndDisconnect(throwable, null);
+    }
+
+    @Override
+    public Future<Void> sendErrorAndDisconnect(Throwable throwable, Frame causingFrame) {
         if(log.isDebugEnabled()){
             log.debug("Sending Error and disconnecting client. Host: {}", serverWebSocket.remoteAddress().host(), throwable);
         }
+        Frame error = Frames.createErrorFrame(throwable, options.isDebugEnabled());
+        String receipt = causingFrame != null ? causingFrame.getReceipt() : null;
+        if (receipt != null) {
+            error.addHeader(Frame.RECEIPT_ID, receipt);
+        }
         Promise<Void> ret = Promise.promise();
-        sendError(throwable)
+        write(error)
                 .onComplete(event -> {
                     // now that data was sent close connection and finish promise
                     close();
@@ -140,16 +150,32 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
      * @param sendErrorFrame true if an ERROR frame should be sent to the client prior to closing it
      */
     public void clientCausedException(Throwable t, boolean sendErrorFrame){
-        try {
-            stompServerHandler.exception(t);
-        } catch (Exception e) {
-            log.error("StompServerHandler.exception handler threw an exception.. You should fix your handler not to throw exceptions.", e);
-        }
+        notifyException(t);
         if(sendErrorFrame) {
             logIfFailed(sendErrorAndDisconnect(t),
                         "Problem sending ERROR frame to client");
         }else{
             close();
+        }
+    }
+
+    /**
+     * Used to signal that the processing of a client frame resulted in an exception: the client receives an ERROR
+     * frame naming that frame's receipt, then the connection is closed
+     * @param t the exception that was caused
+     * @param causingFrame the frame whose processing failed
+     */
+    public void clientCausedException(Throwable t, Frame causingFrame){
+        notifyException(t);
+        logIfFailed(sendErrorAndDisconnect(t, causingFrame),
+                    "Problem sending ERROR frame to client");
+    }
+
+    private void notifyException(Throwable t) {
+        try {
+            stompServerHandler.exception(t);
+        } catch (Exception e) {
+            log.error("StompServerHandler.exception handler threw an exception.. You should fix your handler not to throw exceptions.", e);
         }
     }
 
@@ -222,7 +248,7 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
                 switch (frame.getCommand()) {
                     case CONNECT:
                         if(connected){
-                            clientCausedException(new IllegalStateException("CONNECT has already been called."), true);
+                            clientCausedException(new IllegalStateException("CONNECT has already been called."), frame);
                         }
                         onConnect(frame);
                         break;
@@ -319,7 +345,7 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
             } catch (Exception e) {
                 // Sync throws from the user StompServerHandler (e.g. connect()) must produce
                 // a STOMP ERROR frame so the client sees a diagnostic instead of a bare WS close.
-                clientCausedException(e, true);
+                clientCausedException(e, frame);
             }
         } else {
             log.error("THIS SHOULD NEVER HAPPEN!! Frame Handler called after close.");

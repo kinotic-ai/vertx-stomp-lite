@@ -16,9 +16,12 @@ import java.util.function.Function;
 
 /**
  * A server handler for the client tests: it answers CONNECT as the test decides, records the frames the client
- * sends, receipts them, and lets the test write MESSAGE frames to the client.
+ * sends, receipts them, refuses a SEND to {@link #REFUSED_DESTINATION} with an ERROR frame, and lets the test
+ * write MESSAGE frames to the client.
  */
 public class RecordingStompServerHandler extends AbstractStompServerHandler {
+
+    public static final String REFUSED_DESTINATION = "/queue/refused";
 
     private final Function<Map<String, String>, Future<Map<String, String>>> connectAnswer;
     private final LinkedBlockingQueue<Frame> sendFrames = new LinkedBlockingQueue<>();
@@ -50,13 +53,18 @@ public class RecordingStompServerHandler extends AbstractStompServerHandler {
 
     @Override
     public void send(Frame frame) {
-        sendFrames.add(frame);
-        stompServerConnection.sendReceiptIfNeeded(frame);
+        if (REFUSED_DESTINATION.equals(frame.getDestination())) {
+            stompServerConnection.sendErrorAndDisconnect(new IllegalStateException("refused"), frame);
+        } else {
+            sendFrames.add(frame);
+            stompServerConnection.sendReceiptIfNeeded(frame);
+        }
     }
 
     @Override
     public void subscribe(Frame frame) {
         subscribeFrames.add(frame);
+        stompServerConnection.sendReceiptIfNeeded(frame);
     }
 
     @Override

@@ -42,6 +42,7 @@ class DefaultStompClientConnection implements StompClientConnection {
     private final FrameParser parser;
     private final Map<String, Handler<Frame>> subscriptions = new HashMap<>();
     private final Map<String, Promise<Void>> pendingReceipts = new HashMap<>();
+    private final Promise<Void> closedPromise = Promise.promise();
 
     // the handlers are set from the caller's thread and read on the context; the connected frame and the
     // closed flag are read from any thread
@@ -114,15 +115,17 @@ class DefaultStompClientConnection implements StompClientConnection {
     }
 
     @Override
-    public Future<Void> subscribe(String id, String destination, Handler<Frame> messageHandler) {
+    public Future<Void> subscribe(String id, String destination, Map<String, String> headers, Handler<Frame> messageHandler) {
         Objects.requireNonNull(id, "id must not be null");
         Objects.requireNonNull(destination, "destination must not be null");
+        Objects.requireNonNull(headers, "headers must not be null");
         Objects.requireNonNull(messageHandler, "messageHandler must not be null");
+        Headers frameHeaders = Headers.create(headers);
+        frameHeaders.put(Frame.ID, id);
+        frameHeaders.put(Frame.DESTINATION, destination);
         return onContext(() -> {
             subscriptions.put(id, messageHandler);
-            return write(new Frame(Frame.Command.SUBSCRIBE,
-                                   Headers.create(Frame.ID, id, Frame.DESTINATION, destination),
-                                   null));
+            return writeAwaitingReceipt(new Frame(Frame.Command.SUBSCRIBE, frameHeaders, null));
         });
     }
 
@@ -138,20 +141,14 @@ class DefaultStompClientConnection implements StompClientConnection {
     @Override
     public Future<Void> disconnect() {
         return onContext(() -> {
-            Future<Void> ret;
-            if (closed) {
-                ret = Future.succeededFuture();
-            } else {
+            if (!closed) {
                 String receipt = DISCONNECT_RECEIPT_PREFIX + (++receiptSequence);
                 // the server closes the connection after the RECEIPT, and a server that closes without one has
-                // disconnected the client all the same, so either outcome completes the disconnect
-                ret = writeAwaitingReceipt(new Frame(Frame.Command.DISCONNECT, Headers.create(Frame.RECEIPT, receipt), null))
-                        .transform(ar -> {
-                            close();
-                            return Future.succeededFuture();
-                        });
+                // disconnected the client all the same, so either outcome ends in the close
+                writeAwaitingReceipt(new Frame(Frame.Command.DISCONNECT, Headers.create(Frame.RECEIPT, receipt), null))
+                        .onComplete(ar -> close());
             }
-            return ret;
+            return closedPromise.future();
         });
     }
 
@@ -232,7 +229,9 @@ class DefaultStompClientConnection implements StompClientConnection {
         }
     }
 
-    // The server closes the connection after an ERROR frame, so nothing pending can complete any more. The
+    // The server closes the connection after an ERROR frame, so nothing pending can complete any more: the
+    // operation the frame names by receipt-id fails with the error, the rest with the close that follows. A
+    // frame naming no receipt fails every pending operation, since any of them may be the one it answers. The
     // connection is closed here too, so a server that fails to close is not waited on.
     private void handleError(Frame frame) {
         StompErrorException error = new StompErrorException(frame);
@@ -240,7 +239,15 @@ class DefaultStompClientConnection implements StompClientConnection {
             closeCause = error;
         }
         failConnect(error);
-        failPendingReceipts(error);
+        String receiptId = frame.getHeader(Frame.RECEIPT_ID);
+        if (receiptId == null) {
+            failPendingReceipts(error);
+        } else {
+            Promise<Void> promise = pendingReceipts.remove(receiptId);
+            if (promise != null) {
+                promise.fail(error);
+            }
+        }
         if (errorHandler != null) {
             errorHandler.handle(frame);
         }
@@ -334,11 +341,14 @@ class DefaultStompClientConnection implements StompClientConnection {
             cancelHeartbeat();
             Throwable cause = closeCause;
             failConnect(cause != null ? cause : new VertxException("The connection closed before the CONNECTED frame arrived", true));
-            failPendingReceipts(cause != null ? cause : closedException());
+            failPendingReceipts(cause != null
+                                        ? new VertxException("The connection closed before the receipt arrived", cause, true)
+                                        : closedException());
             subscriptions.clear();
             if (closeHandler != null) {
                 closeHandler.handle(cause);
             }
+            closedPromise.tryComplete();
         }
     }
 

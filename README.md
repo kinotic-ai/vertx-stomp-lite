@@ -59,11 +59,13 @@ WebSocketConnectOptions where = new WebSocketConnectOptions().setAbsoluteURI("ws
 client.connect(where, Map.of(Frame.LOGIN, "alice", Frame.PASSCODE, "secret"))
       .onSuccess(connection -> {
           connection.closeHandler(cause -> log.info("connection closed", cause));
-          connection.subscribe("sub-1", "/queue/greetings", frame -> log.info(frame.getBodyAsString()));
+          connection.subscribe("sub-1", "/queue/greetings", Map.of(), frame -> log.info(frame.getBodyAsString()));
           // completes when the server's RECEIPT arrives, because the frame carries a receipt header
           connection.send("/queue/orders", Map.of(Frame.RECEIPT, "r-1"), Buffer.buffer("{}"));
       });
 ```
 
 Headers the WebSocket upgrade request must carry go on the `WebSocketConnectOptions`; headers of the
-CONNECT frame go in the map. The client adds `accept-version`, `heart-beat` and `host` itself.
+CONNECT frame go in the map. The client adds `accept-version`, `heart-beat` and `host` itself. The
+server's ERROR frames carry the `receipt-id` of the frame they answer, so a client waiting on that
+receipt learns which of its frames failed.
