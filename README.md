@@ -66,6 +66,8 @@ client.connect(where, Map.of(Frame.LOGIN, "alice", Frame.PASSCODE, "secret"))
 ```
 
 Headers the WebSocket upgrade request must carry go on the `WebSocketConnectOptions`; headers of the
-CONNECT frame go in the map. The client adds `accept-version`, `heart-beat` and `host` itself. The
-server's ERROR frames carry the `receipt-id` of the frame they answer, so a client waiting on that
-receipt learns which of its frames failed.
+CONNECT frame go in the map. The client adds `accept-version`, `heart-beat` and `host` itself, and
+requests the `v12.stomp` sub-protocol, which `StompServerVerticle` accepts on its own. A server that
+opens the socket but does not answer the CONNECT frame within `StompClientOptions.connectTimeout`
+fails the connect and the socket is closed. The server's ERROR frames carry the `receipt-id` of the
+frame they answer, so a client waiting on that receipt learns which of its frames failed.

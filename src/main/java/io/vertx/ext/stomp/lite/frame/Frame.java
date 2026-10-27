@@ -39,6 +39,11 @@ public class Frame {
 
   public static final String UTF_8 = "utf-8";
 
+  /**
+   * The WebSocket sub-protocol STOMP 1.2 frames travel under: the client requests it and the server accepts it.
+   */
+  public static final String WEBSOCKET_SUB_PROTOCOL = "v12.stomp";
+
   // General headers
   public static final String CONTENT_LENGTH = "content-length";
   public static final String CONTENT_TYPE = "content-type";

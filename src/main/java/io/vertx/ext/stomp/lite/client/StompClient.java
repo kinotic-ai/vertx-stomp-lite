@@ -3,6 +3,7 @@ package io.vertx.ext.stomp.lite.client;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.WebSocketConnectOptions;
+import io.vertx.ext.stomp.lite.frame.Frame;
 
 import java.util.Map;
 
@@ -17,11 +18,6 @@ import java.util.Map;
 public interface StompClient {
 
     /**
-     * The WebSocket subprotocol STOMP 1.2 is carried on; requested on every connection.
-     */
-    String SUB_PROTOCOL = "v12.stomp";
-
-    /**
      * Creates a client bound to the current Vert.x context, or to a new one when there is none.
      *
      * @param vertx   the Vert.x instance
@@ -33,15 +29,16 @@ public interface StompClient {
     }
 
     /**
-     * Opens a WebSocket to the server and sends a CONNECT frame. The frame carries the given headers plus the
-     * protocol headers the client owns: {@code accept-version}, {@code heart-beat} and, when the caller supplied
-     * none, {@code host}.
+     * Opens a WebSocket to the server under the {@link Frame#WEBSOCKET_SUB_PROTOCOL} sub-protocol and sends a
+     * CONNECT frame. The frame carries the given headers plus the protocol headers the client owns:
+     * {@code accept-version}, {@code heart-beat} and, when the caller supplied none, {@code host}.
      *
      * @param webSocketOptions where to connect, with any headers the WebSocket upgrade request must carry
      * @param connectHeaders  the headers of the CONNECT frame, such as {@code login} and {@code passcode}
      * @return a future completed with the connection once the CONNECTED frame arrives, or failed with the
-     *         {@link StompErrorException} of the ERROR frame the server answered instead, or with the failure
-     *         of the WebSocket connection
+     *         {@link StompErrorException} of the ERROR frame the server answered instead, with the failure of the
+     *         WebSocket connection, or once the server has not answered the CONNECT frame within
+     *         {@link StompClientOptions#getConnectTimeout()}
      */
     Future<StompClientConnection> connect(WebSocketConnectOptions webSocketOptions, Map<String, String> connectHeaders);
 

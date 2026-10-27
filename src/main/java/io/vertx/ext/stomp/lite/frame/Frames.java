@@ -61,12 +61,13 @@ public interface Frames {
      */
     static Frame createErrorFrame(Throwable throwable, boolean includeStackTrace){
         Frame ret;
+        String message = throwable.getMessage() != null ? throwable.getMessage() : throwable.getClass().getName();
         if (includeStackTrace) {
-            ret = createErrorFrame(throwable.getMessage(),
+            ret = createErrorFrame(message,
                                    Headers.create(),
                                    ExceptionUtils.getStackTrace(throwable));
         } else {
-            ret = createErrorFrame( throwable.getMessage(), Headers.create(), "");
+            ret = createErrorFrame(message, Headers.create(), "");
         }
         return ret;
     }

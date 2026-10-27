@@ -14,14 +14,16 @@ import io.vertx.ext.stomp.lite.frame.Frame;
 public class StompClientOptions {
 
     public static final int DEFAULT_MAX_FRAME_SIZE = StompServerOptions.DEFAULT_MAX_BODY_LENGTH;
+    public static final long DEFAULT_CONNECT_TIMEOUT = 10_000;
 
     private WebSocketClientOptions webSocketClientOptions = new WebSocketClientOptions();
     private int maxFrameSize = DEFAULT_MAX_FRAME_SIZE;
+    private long connectTimeout = DEFAULT_CONNECT_TIMEOUT;
     private JsonObject heartbeat = new JsonObject().put("x", 30000).put("y", 30000);
 
     /**
      * Gets the options of the Vert.x WebSocket client that carries the STOMP frames, which hold the TLS
-     * configuration and the connect timeout.
+     * configuration.
      *
      * @return the WebSocket client options
      */
@@ -31,7 +33,7 @@ public class StompClientOptions {
 
     /**
      * Sets the options of the Vert.x WebSocket client that carries the STOMP frames. The maximum WebSocket frame
-     * and message sizes are set from {@link #getMaxFrameSize()} when the client is created.
+     * size is set from {@link #getMaxFrameSize()} when the client is created.
      *
      * @param webSocketClientOptions the WebSocket client options, must not be {@code null}
      * @return the current {@link StompClientOptions}
@@ -59,6 +61,30 @@ public class StompClientOptions {
      */
     public StompClientOptions setMaxFrameSize(int maxFrameSize) {
         this.maxFrameSize = maxFrameSize;
+        return this;
+    }
+
+    /**
+     * Gets the time the server has to answer the CONNECT frame once the WebSocket is open, in milliseconds. A
+     * connection the server has not accepted by then fails and its WebSocket is closed. 10 s by default.
+     *
+     * @return the connect timeout in milliseconds
+     */
+    public long getConnectTimeout() {
+        return connectTimeout;
+    }
+
+    /**
+     * Sets the time the server has to answer the CONNECT frame once the WebSocket is open.
+     *
+     * @param connectTimeout the connect timeout in milliseconds, at least 1
+     * @return the current {@link StompClientOptions}
+     */
+    public StompClientOptions setConnectTimeout(long connectTimeout) {
+        if (connectTimeout < 1) {
+            throw new IllegalArgumentException("connectTimeout must be at least 1 ms but was " + connectTimeout);
+        }
+        this.connectTimeout = connectTimeout;
         return this;
     }
 

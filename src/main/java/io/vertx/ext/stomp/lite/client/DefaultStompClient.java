@@ -7,7 +7,9 @@ import io.vertx.core.Vertx;
 import io.vertx.core.http.WebSocketClient;
 import io.vertx.core.http.WebSocketClientOptions;
 import io.vertx.core.http.WebSocketConnectOptions;
+import io.vertx.ext.stomp.lite.frame.Frame;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -31,10 +33,9 @@ class DefaultStompClient implements StompClient {
         this.vertx = vertx;
         this.context = vertx.getOrCreateContext();
         this.options = options;
-        // the STOMP frame limit bounds the WebSocket frames and messages carrying the STOMP frames too
+        // the STOMP frame limit bounds the WebSocket frames carrying the STOMP frames too
         WebSocketClientOptions webSocketClientOptions = new WebSocketClientOptions(options.getWebSocketClientOptions())
-                .setMaxFrameSize(options.getMaxFrameSize())
-                .setMaxMessageSize(options.getMaxFrameSize());
+                .setMaxFrameSize(options.getMaxFrameSize());
         this.webSocketClient = vertx.createWebSocketClient(webSocketClientOptions);
     }
 
@@ -44,19 +45,29 @@ class DefaultStompClient implements StompClient {
         Objects.requireNonNull(connectHeaders, "connectHeaders must not be null");
         Promise<StompClientConnection> promise = Promise.promise();
         WebSocketConnectOptions effectiveOptions = new WebSocketConnectOptions(webSocketOptions);
-        List<String> subProtocols = effectiveOptions.getSubProtocols();
-        if (subProtocols == null || !subProtocols.contains(SUB_PROTOCOL)) {
-            effectiveOptions.addSubProtocol(SUB_PROTOCOL);
+        // the copy shares the caller's sub-protocol list, so the sub-protocol is added to a list of the client's own
+        List<String> subProtocols = new ArrayList<>(effectiveOptions.getSubProtocols() != null
+                                                            ? effectiveOptions.getSubProtocols()
+                                                            : List.of());
+        if (!subProtocols.contains(Frame.WEBSOCKET_SUB_PROTOCOL)) {
+            subProtocols.add(Frame.WEBSOCKET_SUB_PROTOCOL);
         }
+        effectiveOptions.setSubProtocols(subProtocols);
         // connecting from the client's context binds the socket, and so every handler, to that context
         context.runOnContext(v -> webSocketClient.connect(effectiveOptions)
                                                  .onFailure(promise::fail)
                                                  .onSuccess(webSocket -> {
-                                                     String host = effectiveOptions.getHost() != null
-                                                             ? effectiveOptions.getHost()
-                                                             : webSocket.remoteAddress().host();
-                                                     new DefaultStompClientConnection(vertx, webSocket, options)
-                                                             .connect(host, connectHeaders, promise);
+                                                     try {
+                                                         String host = effectiveOptions.getHost() != null
+                                                                 ? effectiveOptions.getHost()
+                                                                 : webSocket.remoteAddress().host();
+                                                         new DefaultStompClientConnection(vertx, webSocket, options)
+                                                                 .connect(host, connectHeaders, promise);
+                                                     } catch (Exception e) {
+                                                         // the socket is open and nothing else holds it
+                                                         webSocket.close();
+                                                         promise.tryFail(e);
+                                                     }
                                                  }));
         return promise.future();
     }

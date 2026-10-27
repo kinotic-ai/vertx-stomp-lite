@@ -249,8 +249,9 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
                     case CONNECT:
                         if(connected){
                             clientCausedException(new IllegalStateException("CONNECT has already been called."), frame);
+                        } else {
+                            onConnect(frame);
                         }
-                        onConnect(frame);
                         break;
                     case SEND:
                         ensureConnected();

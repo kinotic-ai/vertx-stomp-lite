@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 /**
  * Default {@link StompClientConnection} over a Vert.x {@link WebSocket}. Every method runs on the connection's
@@ -52,9 +53,9 @@ class DefaultStompClientConnection implements StompClientConnection {
     private volatile boolean closed = false;
     private Promise<StompClientConnection> connectPromise;
     private Throwable closeCause;
+    private long connectTimer = -1;
     private long outgoingHeartbeatTimer = -1;
     private long incomingHeartbeatTimer = -1;
-    private long lastWriteNanos;
     private long lastReadNanos;
     private long receiptSequence = 0;
 
@@ -74,7 +75,8 @@ class DefaultStompClientConnection implements StompClientConnection {
      *
      * @param host           the virtual host named in the CONNECT frame when the caller's headers name none
      * @param connectHeaders the caller's CONNECT headers
-     * @param promise        completed with this connection, or failed with what ended the connection first
+     * @param promise        completed with this connection, or failed with what ended the connection first, the
+     *                       connect timeout included
      */
     void connect(String host, Map<String, String> connectHeaders, Promise<StompClientConnection> promise) {
         connectPromise = promise;
@@ -88,6 +90,11 @@ class DefaultStompClientConnection implements StompClientConnection {
             } catch (Exception e) {
                 fail(e);
             }
+        });
+        // a server that opened the socket and never answers CONNECT would otherwise hold the caller and the socket
+        connectTimer = vertx.setTimer(options.getConnectTimeout(), id -> {
+            connectTimer = -1;
+            fail(new VertxException("The server did not answer the CONNECT frame within " + options.getConnectTimeout() + " ms", true));
         });
         Headers headers = Headers.create(connectHeaders);
         headers.put(Frame.ACCEPT_VERSION, ACCEPT_VERSION);
@@ -202,12 +209,13 @@ class DefaultStompClientConnection implements StompClientConnection {
         if (connectPromise == null) {
             fail(new VertxException("The server sent a second CONNECTED frame", true));
         } else {
+            cancelConnectTimer();
             connectedFrame = frame;
             configureHeartbeat(Frame.Heartbeat.create(options.getHeartbeat()),
                                Frame.Heartbeat.parse(frame.getHeader(Frame.HEARTBEAT)));
             Promise<StompClientConnection> promise = connectPromise;
             connectPromise = null;
-            promise.complete(this);
+            promise.tryComplete(this);
         }
     }
 
@@ -258,12 +266,9 @@ class DefaultStompClientConnection implements StompClientConnection {
         long outgoingPeriod = Frame.Heartbeat.computeClientHeartbeatPeriod(client, server);
         long incomingPeriod = Frame.Heartbeat.computeServerHeartbeatPeriod(client, server);
         if (outgoingPeriod > 0) {
-            outgoingHeartbeatTimer = vertx.setPeriodic(outgoingPeriod, id -> {
-                long silentMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - lastWriteNanos);
-                if (silentMillis >= outgoingPeriod) {
-                    write(Buffer.buffer(FrameParser.EOL));
-                }
-            });
+            // sent every period whatever else was written, so the gap the server measures stays one period and
+            // never nears its cutoff of two
+            outgoingHeartbeatTimer = vertx.setPeriodic(outgoingPeriod, id -> write(Buffer.buffer(FrameParser.EOL)));
         }
         if (incomingPeriod > 0) {
             // the same margin the server grants a client: two periods, so a heartbeat delayed by scheduling
@@ -275,6 +280,13 @@ class DefaultStompClientConnection implements StompClientConnection {
                                                     + " ms, the negotiated heartbeat is " + incomingPeriod + " ms", true));
                 }
             });
+        }
+    }
+
+    private void cancelConnectTimer() {
+        if (connectTimer != -1) {
+            vertx.cancelTimer(connectTimer);
+            connectTimer = -1;
         }
     }
 
@@ -299,6 +311,8 @@ class DefaultStompClientConnection implements StompClientConnection {
             ret = write(frame);
         } else if (closed) {
             ret = Future.failedFuture(closedException());
+        } else if (pendingReceipts.containsKey(receipt)) {
+            ret = Future.failedFuture(new IllegalStateException("A frame with the receipt " + receipt + " is still waiting for its RECEIPT"));
         } else {
             Promise<Void> promise = Promise.promise();
             pendingReceipts.put(receipt, promise);
@@ -321,7 +335,6 @@ class DefaultStompClientConnection implements StompClientConnection {
         if (closed) {
             ret = Future.failedFuture(closedException());
         } else {
-            lastWriteNanos = System.nanoTime();
             ret = webSocket.writeBinaryMessage(buffer);
         }
         return ret;
@@ -338,6 +351,7 @@ class DefaultStompClientConnection implements StompClientConnection {
     private void handleClosed() {
         if (!closed) {
             closed = true;
+            cancelConnectTimer();
             cancelHeartbeat();
             Throwable cause = closeCause;
             failConnect(cause != null ? cause : new VertxException("The connection closed before the CONNECTED frame arrived", true));
@@ -346,7 +360,11 @@ class DefaultStompClientConnection implements StompClientConnection {
                                         : closedException());
             subscriptions.clear();
             if (closeHandler != null) {
-                closeHandler.handle(cause);
+                try {
+                    closeHandler.handle(cause);
+                } catch (Exception e) {
+                    log.error("The close handler failed", e);
+                }
             }
             closedPromise.tryComplete();
         }
@@ -356,7 +374,7 @@ class DefaultStompClientConnection implements StompClientConnection {
         if (connectPromise != null) {
             Promise<StompClientConnection> promise = connectPromise;
             connectPromise = null;
-            promise.fail(cause);
+            promise.tryFail(cause);
         }
     }
 
@@ -371,14 +389,25 @@ class DefaultStompClientConnection implements StompClientConnection {
     }
 
     // The connection's state is only ever touched on its context
-    private <T> Future<T> onContext(java.util.function.Supplier<Future<T>> operation) {
+    private <T> Future<T> onContext(Supplier<Future<T>> operation) {
         Future<T> ret;
         if (Vertx.currentContext() == context) {
-            ret = operation.get();
+            ret = guarded(operation);
         } else {
             Promise<T> promise = Promise.promise();
-            context.runOnContext(v -> operation.get().onComplete(promise));
+            context.runOnContext(v -> guarded(operation).onComplete(promise));
             ret = promise.future();
+        }
+        return ret;
+    }
+
+    // a throw from the operation is the result's failure, from whichever thread the caller came
+    private <T> Future<T> guarded(Supplier<Future<T>> operation) {
+        Future<T> ret;
+        try {
+            ret = operation.get();
+        } catch (Exception e) {
+            ret = Future.failedFuture(e);
         }
         return ret;
     }

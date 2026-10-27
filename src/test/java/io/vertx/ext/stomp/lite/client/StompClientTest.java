@@ -177,7 +177,7 @@ public class StompClientTest {
     @Test
     public void silentServerIsLostAfterTheNegotiatedHeartbeat() throws Exception {
         // a scripted server that promises a heartbeat every 300 ms and then says nothing
-        HttpServer server = vertx.createHttpServer(new HttpServerOptions().setPort(port).setWebSocketSubProtocols(List.of(StompClient.SUB_PROTOCOL)))
+        HttpServer server = vertx.createHttpServer(new HttpServerOptions().setPort(port).setWebSocketSubProtocols(List.of(Frame.WEBSOCKET_SUB_PROTOCOL)))
                                  .webSocketHandler(socket -> {
                                      FrameParser parser = new FrameParser();
                                      parser.handler(frame -> {
@@ -202,6 +202,30 @@ public class StompClientTest {
         assertTrue(cause.getMessage(), cause.getMessage().contains("heartbeat"));
         assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 5000);
         assertFalse(connection.isConnected());
+    }
+
+    @Test
+    public void serverSilentAfterTheUpgradeFailsTheConnectWithinTheTimeout() throws Exception {
+        // a scripted server that opens the WebSocket and never answers the CONNECT frame
+        CompletableFuture<Void> socketClosed = new CompletableFuture<>();
+        HttpServer server = vertx.createHttpServer(new HttpServerOptions().setPort(port).setWebSocketSubProtocols(List.of(Frame.WEBSOCKET_SUB_PROTOCOL)))
+                                 .webSocketHandler(socket -> {
+                                     socket.handler(buffer -> {});
+                                     socket.closeHandler(v -> socketClosed.complete(null));
+                                 });
+        server.listen().await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        client = StompClient.create(vertx, new StompClientOptions().setConnectTimeout(300));
+
+        long started = System.nanoTime();
+        try {
+            connect(Collections.emptyMap());
+            fail("the connect should time out");
+        } catch (ExecutionException e) {
+            assertTrue(e.getCause().getMessage(), e.getCause().getMessage().contains("CONNECT"));
+        }
+        assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 5000);
+        // the socket the server opened does not outlive the failed connect
+        socketClosed.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
     }
 
     @Test
@@ -240,8 +264,8 @@ public class StompClientTest {
     private void startServer(java.util.function.Function<Map<String, String>, Future<Map<String, String>>> connectAnswer,
                              StompServerOptions stompOptions) throws Exception {
         handler = new RecordingStompServerHandler(connectAnswer);
-        HttpServerOptions httpOptions = new HttpServerOptions().setPort(port)
-                                                               .setWebSocketSubProtocols(List.of(StompClient.SUB_PROTOCOL));
+        // the verticle accepts the STOMP sub-protocol on its own, so the options name none
+        HttpServerOptions httpOptions = new HttpServerOptions().setPort(port);
         deploymentId = vertx.deployVerticle(StompServerVerticleFactory.create(httpOptions,
                                                                               stompOptions.setWebsocketPath(WEBSOCKET_PATH),
                                                                               () -> handler,

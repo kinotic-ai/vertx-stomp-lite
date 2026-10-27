@@ -29,8 +29,8 @@ public interface StompClientConnection {
      * @param headers     the other headers of the frame, may be empty
      * @param body        the body, or {@code null} for none
      * @return a future completed when the frame is written, or when the RECEIPT for the frame's {@code receipt}
-     *         header arrives; failed with the ERROR frame's {@link StompErrorException} or when the connection
-     *         closes first
+     *         header arrives; failed with the ERROR frame's {@link StompErrorException}, when the connection
+     *         closes first, or at once when another frame is still waiting for a RECEIPT of the same id
      */
     Future<Void> send(String destination, Map<String, String> headers, Buffer body);
 
@@ -42,8 +42,8 @@ public interface StompClientConnection {
      * @param headers        the other headers of the frame, may be empty
      * @param messageHandler receives the MESSAGE frames of the subscription
      * @return a future completed when the frame is written, or when the RECEIPT for the frame's {@code receipt}
-     *         header arrives; failed with the ERROR frame's {@link StompErrorException} or when the connection
-     *         closes first
+     *         header arrives; failed with the ERROR frame's {@link StompErrorException}, when the connection
+     *         closes first, or at once when another frame is still waiting for a RECEIPT of the same id
      */
     Future<Void> subscribe(String id, String destination, Map<String, String> headers, Handler<Frame> messageHandler);
 
