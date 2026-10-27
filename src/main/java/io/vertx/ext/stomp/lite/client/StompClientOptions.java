@@ -45,7 +45,8 @@ public class StompClientOptions {
 
     /**
      * Gets the size a STOMP frame body must stay under, in bytes. A body reaching it, or a WebSocket frame
-     * exceeding it, closes the connection with an error. 10 MB by default.
+     * exceeding it, closes the connection with an error. The WebSocket frames the client writes are sized by it
+     * too, so the server must accept WebSocket frames this large. 10 MB by default.
      *
      * @return the maximum frame size in bytes
      */
@@ -56,10 +57,13 @@ public class StompClientOptions {
     /**
      * Sets the size a STOMP frame body must stay under, in bytes.
      *
-     * @param maxFrameSize the maximum frame size in bytes
+     * @param maxFrameSize the maximum frame size in bytes, at least 1
      * @return the current {@link StompClientOptions}
      */
     public StompClientOptions setMaxFrameSize(int maxFrameSize) {
+        if (maxFrameSize < 1) {
+            throw new IllegalArgumentException("maxFrameSize must be at least 1 byte but was " + maxFrameSize);
+        }
         this.maxFrameSize = maxFrameSize;
         return this;
     }

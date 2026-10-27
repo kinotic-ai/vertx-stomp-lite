@@ -39,7 +39,6 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
     private boolean connected = false;
     private boolean closed = false;
     private volatile long lastClientActivity;
-    private volatile long lastServerActivity;
     private long serverHeartbeat = -1;
     private long clientHeartbeat = -1;
 
@@ -96,7 +95,6 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
 
     @Override
     public Future<Void> write(Buffer buffer) {
-        onServerActivity();
         return serverWebSocket.writeBinaryMessage(buffer);
     }
 
@@ -145,18 +143,13 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
     }
 
     /**
-     * Used to signal that the processing of a frame resulted in an exception
+     * Used to signal that an exception occurred before a client frame could be processed: the connection is closed
+     * without an ERROR frame
      * @param t the exception that was caused
-     * @param sendErrorFrame true if an ERROR frame should be sent to the client prior to closing it
      */
-    public void clientCausedException(Throwable t, boolean sendErrorFrame){
+    public void clientCausedException(Throwable t){
         notifyException(t);
-        if(sendErrorFrame) {
-            logIfFailed(sendErrorAndDisconnect(t),
-                        "Problem sending ERROR frame to client");
-        }else{
-            close();
-        }
+        close();
     }
 
     /**
@@ -455,24 +448,15 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
         lastClientActivity = System.nanoTime();
     }
 
-    private void onServerActivity() {
-        lastServerActivity = System.nanoTime();
-    }
-
     private void ping() {
-        // we send directly so we do not increment serverActivity since we do not want pings to count towards that metric
         serverWebSocket.writeBinaryMessage(Buffer.buffer(FrameParser.EOL));
     }
 
     private void configureHeartbeat(long clientHeartbeatPeriod, long serverHeartbeatPeriod) {
         if (serverHeartbeatPeriod > 0) {
-            serverHeartbeat = vertx.setPeriodic(serverHeartbeatPeriod, event -> {
-                long delta = System.nanoTime() - lastServerActivity;
-                final long deltaInMs = TimeUnit.MILLISECONDS.convert(delta, TimeUnit.NANOSECONDS);
-                if (deltaInMs >= serverHeartbeatPeriod) {
-                    ping();
-                }
-            });
+            // sent every period whatever else was written, so the gap the client measures stays one period and
+            // never nears its cutoff of two
+            serverHeartbeat = vertx.setPeriodic(serverHeartbeatPeriod, event -> ping());
         }
         if (clientHeartbeatPeriod > 0) {
             clientHeartbeat = vertx.setPeriodic(clientHeartbeatPeriod, l -> {

@@ -4,7 +4,6 @@ import io.vertx.core.Future;
 import io.vertx.core.MultiMap;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.ext.stomp.lite.AbstractStompServerHandler;
-import io.vertx.ext.stomp.lite.StompServerConnection;
 import io.vertx.ext.stomp.lite.frame.Frame;
 import io.vertx.ext.stomp.lite.frame.Headers;
 import io.vertx.ext.web.RoutingContext;
@@ -29,7 +28,6 @@ public class RecordingStompServerHandler extends AbstractStompServerHandler {
     private final LinkedBlockingQueue<Frame> unsubscribeFrames = new LinkedBlockingQueue<>();
     private final CompletableFuture<Void> disconnected = new CompletableFuture<>();
     private final CompletableFuture<Void> closed = new CompletableFuture<>();
-    private final CompletableFuture<StompServerConnection> connection = new CompletableFuture<>();
 
     public RecordingStompServerHandler(Function<Map<String, String>, Future<Map<String, String>>> connectAnswer) {
         this.connectAnswer = connectAnswer;
@@ -38,12 +36,6 @@ public class RecordingStompServerHandler extends AbstractStompServerHandler {
     @Override
     public Future<MultiMap> handshake(RoutingContext routingContext) {
         return Future.succeededFuture(MultiMap.caseInsensitiveMultiMap());
-    }
-
-    @Override
-    public void connectionCreated(StompServerConnection stompServerConnection) {
-        super.connectionCreated(stompServerConnection);
-        connection.complete(stompServerConnection);
     }
 
     @Override
@@ -135,10 +127,6 @@ public class RecordingStompServerHandler extends AbstractStompServerHandler {
 
     public CompletableFuture<Void> closedSignal() {
         return closed;
-    }
-
-    public CompletableFuture<StompServerConnection> connection() {
-        return connection;
     }
 
 }

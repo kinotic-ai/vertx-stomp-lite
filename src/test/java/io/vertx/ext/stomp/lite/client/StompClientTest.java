@@ -24,6 +24,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -42,7 +43,6 @@ public class StompClientTest {
     private Vertx vertx;
     private int port;
     private RecordingStompServerHandler handler;
-    private String deploymentId;
     private StompClient client;
 
     @Before
@@ -55,10 +55,13 @@ public class StompClientTest {
 
     @After
     public void tearDown() throws Exception {
-        if (client != null) {
-            client.close().await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        try {
+            if (client != null) {
+                client.close().await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            }
+        } finally {
+            vertx.close().await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
         }
-        vertx.close().await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
     }
 
     @Test
@@ -266,20 +269,16 @@ public class StompClientTest {
         handler = new RecordingStompServerHandler(connectAnswer);
         // the verticle accepts the STOMP sub-protocol on its own, so the options name none
         HttpServerOptions httpOptions = new HttpServerOptions().setPort(port);
-        deploymentId = vertx.deployVerticle(StompServerVerticleFactory.create(httpOptions,
-                                                                              stompOptions.setWebsocketPath(WEBSOCKET_PATH),
-                                                                              () -> handler,
-                                                                              null))
-                            .await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        vertx.deployVerticle(StompServerVerticleFactory.create(httpOptions,
+                                                               stompOptions.setWebsocketPath(WEBSOCKET_PATH),
+                                                               () -> handler,
+                                                               null))
+             .await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
     }
 
     private StompClientConnection connect(Map<String, String> connectHeaders) throws Exception {
         WebSocketConnectOptions options = new WebSocketConnectOptions().setHost("localhost").setPort(port).setURI(WEBSOCKET_PATH);
         return client.connect(options, connectHeaders).toCompletionStage().toCompletableFuture().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
-    }
-
-    private static void assertArrayEquals(byte[] expected, byte[] actual) {
-        org.junit.Assert.assertArrayEquals(expected, actual);
     }
 
 }

@@ -1,7 +1,6 @@
 package io.vertx.ext.stomp.lite;
 
 import io.vertx.core.Future;
-import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.net.SocketAddress;
 import io.vertx.ext.stomp.lite.frame.Frame;
@@ -63,7 +62,7 @@ public interface StompServerConnection {
      * Writes the given frame to the socket.
      *
      * @param frame the frame, must not be {@code null}.
-     * @return a {@link Promise} that will be completed when the data is successfully sent.
+     * @return a future completed when the data is successfully sent.
      *         Will be failed if there is a problem sending the data or the underlying TCP connection is already closed.
      */
     Future<Void> write(Frame frame);
@@ -72,7 +71,7 @@ public interface StompServerConnection {
      * Writes the given buffer to the socket. This is a low level API that should be used carefully.
      *
      * @param buffer the buffer
-     * @return a {@link Promise} that will be completed when the data is successfully sent.
+     * @return a future completed when the data is successfully sent.
      *         Will be failed if there is a problem sending the data or the underlying TCP connection is already closed.
      */
     Future<Void> write(Buffer buffer);
@@ -80,7 +79,7 @@ public interface StompServerConnection {
     /**
      * Will send receipt frame acknowledgement to clients when requested by a receipt header
      * @param frame to check for a receipt header
-     * @return a {@link Promise} that will be completed when the data is successfully sent.
+     * @return a future completed when the data is successfully sent.
      *         Will be failed if there is a problem sending the data or the underlying TCP connection is already closed.
      */
     Future<Void> sendReceiptIfNeeded(Frame frame);
@@ -88,7 +87,7 @@ public interface StompServerConnection {
     /**
      * Sends an error frame to the client and leaves the client connected
      * @param throwable the error that occurred
-     * @return a {@link Promise} that will be completed when the data is successfully sent.
+     * @return a future completed when the data is successfully sent.
      *         Will be failed if there is a problem sending the data or the underlying TCP connection is already closed.
      * @deprecated does not comply to the STOMP spec
      */
@@ -98,7 +97,7 @@ public interface StompServerConnection {
     /**
      * Sends an error frame to the client and then disconnects the client per the Stomp Spec
      * @param throwable the error that occurred
-     * @return a {@link Promise} that will be completed when the data is successfully sent.
+     * @return a future completed when the data is successfully sent.
      *         Will be failed if there is a problem sending the data or the underlying TCP connection is already closed.
      */
     Future<Void> sendErrorAndDisconnect(Throwable throwable);
@@ -109,7 +108,7 @@ public interface StompServerConnection {
      * client knows which of its frames failed.
      * @param throwable the error that occurred
      * @param causingFrame the client frame the server could not process, or null when no frame is to blame
-     * @return a {@link Promise} that will be completed when the data is successfully sent.
+     * @return a future completed when the data is successfully sent.
      *         Will be failed if there is a problem sending the data or the underlying TCP connection is already closed.
      */
     Future<Void> sendErrorAndDisconnect(Throwable throwable, Frame causingFrame);

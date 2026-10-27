@@ -87,6 +87,11 @@ public class StompServerVerticle extends VerticleBase {
             withStomp.add(Frame.WEBSOCKET_SUB_PROTOCOL);
             effectiveHttpOptions.setWebSocketSubProtocols(withStomp);
         }
+        // a client writes a STOMP frame in WebSocket frames up to its own frame limit, so the server accepts
+        // WebSocket frames as large as the bodies it accepts
+        if (effectiveHttpOptions.getMaxWebSocketFrameSize() < stompOptions.getMaxBodyLength()) {
+            effectiveHttpOptions.setMaxWebSocketFrameSize(stompOptions.getMaxBodyLength());
+        }
 
         httpServer = vertx.createHttpServer(effectiveHttpOptions)
                           .requestHandler(effectiveRouter)
