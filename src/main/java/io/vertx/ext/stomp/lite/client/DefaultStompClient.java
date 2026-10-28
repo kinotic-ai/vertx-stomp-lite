@@ -1,12 +1,12 @@
 package io.vertx.ext.stomp.lite.client;
 
-import io.vertx.core.Context;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.WebSocketClient;
 import io.vertx.core.http.WebSocketClientOptions;
 import io.vertx.core.http.WebSocketConnectOptions;
+import io.vertx.core.internal.ContextInternal;
 import io.vertx.ext.stomp.lite.frame.Frame;
 
 import java.util.ArrayList;
@@ -23,7 +23,7 @@ import java.util.Objects;
 class DefaultStompClient implements StompClient {
 
     private final Vertx vertx;
-    private final Context context;
+    private final ContextInternal context;
     private final StompClientOptions options;
     private final WebSocketClient webSocketClient;
 
@@ -31,7 +31,7 @@ class DefaultStompClient implements StompClient {
         Objects.requireNonNull(vertx, "vertx must not be null");
         Objects.requireNonNull(options, "options must not be null");
         this.vertx = vertx;
-        this.context = vertx.getOrCreateContext();
+        this.context = (ContextInternal) vertx.getOrCreateContext();
         this.options = options;
         // the STOMP frame limit bounds the WebSocket frames carrying the STOMP frames too
         WebSocketClientOptions webSocketClientOptions = new WebSocketClientOptions(options.getWebSocketClientOptions())
@@ -43,7 +43,9 @@ class DefaultStompClient implements StompClient {
     public Future<StompClientConnection> connect(WebSocketConnectOptions webSocketOptions, Map<String, String> connectHeaders) {
         Objects.requireNonNull(webSocketOptions, "webSocketOptions must not be null");
         Objects.requireNonNull(connectHeaders, "connectHeaders must not be null");
-        Promise<StompClientConnection> promise = Promise.promise();
+        // a promise of the context reports a throw from the caller's handler to the context; a context-less one
+        // would drop it
+        Promise<StompClientConnection> promise = context.promise();
         WebSocketConnectOptions effectiveOptions = new WebSocketConnectOptions(webSocketOptions);
         // the copy shares the caller's sub-protocol list, so the sub-protocol is added to a list of the client's own
         List<String> subProtocols = new ArrayList<>(effectiveOptions.getSubProtocols() != null

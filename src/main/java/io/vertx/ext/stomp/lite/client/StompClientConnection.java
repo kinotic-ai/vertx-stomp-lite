@@ -43,7 +43,8 @@ public interface StompClientConnection {
      * @param messageHandler receives the MESSAGE frames of the subscription
      * @return a future completed when the frame is written, or when the RECEIPT for the frame's {@code receipt}
      *         header arrives; failed with the ERROR frame's {@link StompErrorException}, when the connection
-     *         closes first, or at once when another frame is still waiting for a RECEIPT of the same id
+     *         closes first, or at once when the subscription id is in use or another frame is still waiting for
+     *         a RECEIPT of the same id
      */
     Future<Void> subscribe(String id, String destination, Map<String, String> headers, Handler<Frame> messageHandler);
 
@@ -89,7 +90,7 @@ public interface StompClientConnection {
      * connection: the {@link StompErrorException} of an ERROR frame, the heartbeat failure of a silent server, a
      * frame the client could not parse or accept, or a transport failure. It is {@code null} when the connection
      * closed without any such failure, after {@link #disconnect()}, {@link #close()} or a close the server
-     * initiated without an ERROR frame.
+     * initiated without an ERROR frame. A handler set after the connection closed is invoked at once.
      *
      * @param handler the handler
      * @return this for fluent usage

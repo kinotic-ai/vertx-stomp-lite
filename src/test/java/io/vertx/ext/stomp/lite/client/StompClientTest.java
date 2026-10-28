@@ -262,6 +262,10 @@ public class StompClientTest {
         handler.closedSignal().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
         assertNull(closeCause.get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
         assertFalse(connection.isConnected());
+        // a handler set after the close learns of it all the same
+        CompletableFuture<Throwable> lateCloseCause = new CompletableFuture<>();
+        connection.closeHandler(lateCloseCause::complete);
+        assertNull(lateCloseCause.get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
     }
 
     private void startServer(java.util.function.Function<Map<String, String>, Future<Map<String, String>>> connectAnswer,

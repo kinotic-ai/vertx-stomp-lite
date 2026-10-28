@@ -5,6 +5,8 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.ext.stomp.lite.StompServerOptions;
 import io.vertx.ext.stomp.lite.frame.Frame;
 
+import java.util.Objects;
+
 /**
  * STOMP client options. The WebSocket transport, TLS included, is configured through the Vert.x
  * {@link WebSocketClientOptions} these options carry.
@@ -39,7 +41,7 @@ public class StompClientOptions {
      * @return the current {@link StompClientOptions}
      */
     public StompClientOptions setWebSocketClientOptions(WebSocketClientOptions webSocketClientOptions) {
-        this.webSocketClientOptions = webSocketClientOptions;
+        this.webSocketClientOptions = Objects.requireNonNull(webSocketClientOptions, "webSocketClientOptions must not be null");
         return this;
     }
 
@@ -112,7 +114,7 @@ public class StompClientOptions {
      * @see Frame.Heartbeat
      */
     public StompClientOptions setHeartbeat(JsonObject heartbeat) {
-        this.heartbeat = heartbeat;
+        this.heartbeat = Objects.requireNonNull(heartbeat, "heartbeat must not be null");
         return this;
     }
 

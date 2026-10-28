@@ -449,7 +449,7 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
     }
 
     private void ping() {
-        serverWebSocket.writeBinaryMessage(Buffer.buffer(FrameParser.EOL));
+        serverWebSocket.writeBinaryMessage(Frames.ping().toBuffer());
     }
 
     private void configureHeartbeat(long clientHeartbeatPeriod, long serverHeartbeatPeriod) {

@@ -1,6 +1,5 @@
 package io.vertx.ext.stomp.lite.client;
 
-import io.vertx.core.Context;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.Promise;
@@ -8,9 +7,11 @@ import io.vertx.core.Vertx;
 import io.vertx.core.VertxException;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.WebSocket;
+import io.vertx.core.internal.ContextInternal;
 import io.vertx.ext.stomp.lite.StompServerOptions;
 import io.vertx.ext.stomp.lite.frame.Frame;
 import io.vertx.ext.stomp.lite.frame.FrameParser;
+import io.vertx.ext.stomp.lite.frame.Frames;
 import io.vertx.ext.stomp.lite.frame.Headers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,6 +21,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
@@ -37,30 +39,30 @@ class DefaultStompClientConnection implements StompClientConnection {
     private static final String DISCONNECT_RECEIPT_PREFIX = "disconnect-";
 
     private final Vertx vertx;
-    private final Context context;
+    private final ContextInternal context;
     private final WebSocket webSocket;
     private final StompClientOptions options;
     private final FrameParser parser;
     private final Map<String, Handler<Frame>> subscriptions = new HashMap<>();
     private final Map<String, Promise<Void>> pendingReceipts = new HashMap<>();
-    private final Promise<Void> closedPromise = Promise.promise();
+    private final Promise<Void> closedPromise;
 
-    // the handlers are set from the caller's thread and read on the context; the connected frame and the
-    // closed flag are read from any thread
-    private volatile Handler<Frame> errorHandler;
-    private volatile Handler<Throwable> closeHandler;
+    // the connected frame and the closed flag are read from any thread; everything else only on the context
     private volatile Frame connectedFrame;
     private volatile boolean closed = false;
+    private Handler<Frame> errorHandler;
+    private Handler<Throwable> closeHandler;
+    private Throwable closeCause;
     private Promise<StompClientConnection> connectPromise;
     private long connectTimer = -1;
     private long outgoingHeartbeatTimer = -1;
     private long incomingHeartbeatTimer = -1;
     private long lastReadNanos;
-    private long receiptSequence = 0;
 
     DefaultStompClientConnection(Vertx vertx, WebSocket webSocket, StompClientOptions options) {
         this.vertx = vertx;
-        this.context = vertx.getOrCreateContext();
+        this.context = (ContextInternal) vertx.getOrCreateContext();
+        this.closedPromise = context.promise();
         this.webSocket = webSocket;
         this.options = options;
         // the parser enforces the body limit; the header limits stay at the server defaults
@@ -130,8 +132,16 @@ class DefaultStompClientConnection implements StompClientConnection {
         frameHeaders.put(Frame.ID, id);
         frameHeaders.put(Frame.DESTINATION, destination);
         return onContext(() -> {
-            subscriptions.put(id, messageHandler);
-            return writeAwaitingReceipt(new Frame(Frame.Command.SUBSCRIBE, frameHeaders, null));
+            Future<Void> ret;
+            if (subscriptions.containsKey(id)) {
+                ret = context.failedFuture(new IllegalStateException("The subscription id " + id + " is in use"));
+            } else {
+                subscriptions.put(id, messageHandler);
+                ret = writeAwaitingReceipt(new Frame(Frame.Command.SUBSCRIBE, frameHeaders, null));
+                // a SUBSCRIBE the server did not take routes nothing
+                ret.onFailure(cause -> subscriptions.remove(id, messageHandler));
+            }
+            return ret;
         });
     }
 
@@ -148,7 +158,7 @@ class DefaultStompClientConnection implements StompClientConnection {
     public Future<Void> disconnect() {
         return onContext(() -> {
             if (!closed) {
-                String receipt = DISCONNECT_RECEIPT_PREFIX + (++receiptSequence);
+                String receipt = DISCONNECT_RECEIPT_PREFIX + UUID.randomUUID();
                 // the server closes the connection after the RECEIPT, and a server that closes without one has
                 // disconnected the client all the same, so either outcome ends in the close
                 writeAwaitingReceipt(new Frame(Frame.Command.DISCONNECT, Headers.create(Frame.RECEIPT, receipt), null))
@@ -170,35 +180,45 @@ class DefaultStompClientConnection implements StompClientConnection {
 
     @Override
     public StompClientConnection errorHandler(Handler<Frame> handler) {
-        this.errorHandler = handler;
+        runOnContext(() -> errorHandler = handler);
         return this;
     }
 
     @Override
     public StompClientConnection closeHandler(Handler<Throwable> handler) {
-        this.closeHandler = handler;
+        // set on the context, so a handler set after the close is invoked here and one set before it only by
+        // terminate()
+        runOnContext(() -> {
+            closeHandler = handler;
+            if (closed && handler != null) {
+                callUserCode(() -> handler.handle(closeCause));
+            }
+        });
         return this;
     }
 
+    // frames still in the read buffer after the connection ended are dropped
     private void handleFrame(Frame frame) {
-        switch (frame.getCommand()) {
-            case CONNECTED:
-                handleConnected(frame);
-                break;
-            case MESSAGE:
-                handleMessage(frame);
-                break;
-            case RECEIPT:
-                handleReceipt(frame);
-                break;
-            case ERROR:
-                handleError(frame);
-                break;
-            case PING:
-                // read activity, which the data handler already recorded
-                break;
-            default:
-                terminate(new VertxException("The server sent a " + frame.getCommand() + " frame", true));
+        if (!closed) {
+            switch (frame.getCommand()) {
+                case CONNECTED:
+                    handleConnected(frame);
+                    break;
+                case MESSAGE:
+                    handleMessage(frame);
+                    break;
+                case RECEIPT:
+                    handleReceipt(frame);
+                    break;
+                case ERROR:
+                    handleError(frame);
+                    break;
+                case PING:
+                    // read activity, which the data handler already recorded
+                    break;
+                default:
+                    terminate(new VertxException("The server sent a " + frame.getCommand() + " frame", true));
+            }
         }
     }
 
@@ -212,7 +232,7 @@ class DefaultStompClientConnection implements StompClientConnection {
                                Frame.Heartbeat.parse(frame.getHeader(Frame.HEARTBEAT)));
             Promise<StompClientConnection> promise = connectPromise;
             connectPromise = null;
-            callUserCode(() -> promise.tryComplete(this));
+            promise.tryComplete(this);
         }
     }
 
@@ -228,7 +248,7 @@ class DefaultStompClientConnection implements StompClientConnection {
     private void handleReceipt(Frame frame) {
         Promise<Void> promise = pendingReceipts.remove(frame.getHeader(Frame.RECEIPT_ID));
         if (promise != null) {
-            callUserCode(promise::complete);
+            promise.complete();
         } else {
             log.warn("Dropping a RECEIPT frame for the unknown receipt {}", frame.getHeader(Frame.RECEIPT_ID));
         }
@@ -240,14 +260,13 @@ class DefaultStompClientConnection implements StompClientConnection {
     // connection is ended here too, so a server that fails to close is not waited on.
     private void handleError(Frame frame) {
         StompErrorException error = new StompErrorException(frame);
-        failConnect(error);
         String receiptId = frame.getHeader(Frame.RECEIPT_ID);
         if (receiptId == null) {
             failPendingReceipts(error);
         } else {
             Promise<Void> promise = pendingReceipts.remove(receiptId);
             if (promise != null) {
-                callUserCode(() -> promise.fail(error));
+                promise.fail(error);
             }
         }
         if (errorHandler != null) {
@@ -262,7 +281,7 @@ class DefaultStompClientConnection implements StompClientConnection {
         if (outgoingPeriod > 0) {
             // sent every period whatever else was written, so the gap the server measures stays one period and
             // never nears its cutoff of two
-            outgoingHeartbeatTimer = vertx.setPeriodic(outgoingPeriod, id -> write(Buffer.buffer(FrameParser.EOL)));
+            outgoingHeartbeatTimer = vertx.setPeriodic(outgoingPeriod, id -> write(Frames.ping()));
         }
         if (incomingPeriod > 0) {
             // the same margin the server grants a client: two periods, so a heartbeat delayed by scheduling
@@ -304,15 +323,15 @@ class DefaultStompClientConnection implements StompClientConnection {
         if (receipt == null) {
             ret = write(frame);
         } else if (closed) {
-            ret = Future.failedFuture(closedException());
+            ret = context.failedFuture(closedException());
         } else if (pendingReceipts.containsKey(receipt)) {
-            ret = Future.failedFuture(new IllegalStateException("A frame with the receipt " + receipt + " is still waiting for its RECEIPT"));
+            ret = context.failedFuture(new IllegalStateException("A frame with the receipt " + receipt + " is still waiting for its RECEIPT"));
         } else {
-            Promise<Void> promise = Promise.promise();
+            Promise<Void> promise = context.promise();
             pendingReceipts.put(receipt, promise);
             write(frame).onFailure(throwable -> {
                 if (pendingReceipts.remove(receipt) != null) {
-                    callUserCode(() -> promise.fail(throwable));
+                    promise.fail(throwable);
                 }
             });
             ret = promise.future();
@@ -327,7 +346,7 @@ class DefaultStompClientConnection implements StompClientConnection {
     private Future<Void> write(Buffer buffer) {
         Future<Void> ret;
         if (closed) {
-            ret = Future.failedFuture(closedException());
+            ret = context.failedFuture(closedException());
         } else {
             ret = webSocket.writeBinaryMessage(buffer);
         }
@@ -340,6 +359,7 @@ class DefaultStompClientConnection implements StompClientConnection {
     private void terminate(Throwable cause) {
         if (!closed) {
             closed = true;
+            closeCause = cause;
             cancelConnectTimer();
             cancelHeartbeat();
             failConnect(cause != null ? cause : new VertxException("The connection closed before the CONNECTED frame arrived", true));
@@ -361,18 +381,18 @@ class DefaultStompClientConnection implements StompClientConnection {
         if (connectPromise != null) {
             Promise<StompClientConnection> promise = connectPromise;
             connectPromise = null;
-            callUserCode(() -> promise.tryFail(cause));
+            promise.tryFail(cause);
         }
     }
 
     private void failPendingReceipts(Throwable cause) {
         List<Promise<Void>> pending = new ArrayList<>(pendingReceipts.values());
         pendingReceipts.clear();
-        pending.forEach(promise -> callUserCode(() -> promise.fail(cause)));
+        pending.forEach(promise -> promise.fail(cause));
     }
 
-    // Completing a promise runs the caller's handlers inline, as does a subscription's handler: a throw there is
-    // the caller's failure and is logged, never the connection's
+    // A subscription, error or close handler runs inline: a throw there is the caller's failure and is logged,
+    // never the connection's. A handler of a returned future runs through the context, which reports its throw
     private void callUserCode(Runnable userCode) {
         try {
             userCode.run();
@@ -391,7 +411,7 @@ class DefaultStompClientConnection implements StompClientConnection {
         if (Vertx.currentContext() == context) {
             ret = attempt(operation);
         } else {
-            Promise<T> promise = Promise.promise();
+            Promise<T> promise = context.promise();
             context.runOnContext(v -> attempt(operation).onComplete(promise));
             ret = promise.future();
         }
@@ -412,7 +432,7 @@ class DefaultStompClientConnection implements StompClientConnection {
         try {
             ret = operation.get();
         } catch (Exception e) {
-            ret = Future.failedFuture(e);
+            ret = context.failedFuture(e);
         }
         return ret;
     }
