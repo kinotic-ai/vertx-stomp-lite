@@ -22,10 +22,14 @@ import io.vertx.core.Future;
 import io.vertx.core.VerticleBase;
 import io.vertx.core.http.HttpServer;
 import io.vertx.core.http.HttpServerOptions;
+import io.vertx.ext.stomp.lite.frame.Frame;
 import io.vertx.ext.stomp.lite.handler.StompServerWebSocketHandler;
 import io.vertx.ext.web.Router;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Created by Navid Mitchell on 2019-01-09.
@@ -75,7 +79,21 @@ public class StompServerVerticle extends VerticleBase {
                            }
                        });
 
-        httpServer = vertx.createHttpServer(httpOptions)
+        // the client requests the STOMP sub-protocol, and a handshake that does not echo it fails on the client
+        HttpServerOptions effectiveHttpOptions = new HttpServerOptions(httpOptions);
+        List<String> subProtocols = httpOptions.getWebSocketSubProtocols();
+        if (subProtocols == null || !subProtocols.contains(Frame.WEBSOCKET_SUB_PROTOCOL)) {
+            List<String> withStomp = new ArrayList<>(subProtocols != null ? subProtocols : List.of());
+            withStomp.add(Frame.WEBSOCKET_SUB_PROTOCOL);
+            effectiveHttpOptions.setWebSocketSubProtocols(withStomp);
+        }
+        // a client writes a STOMP frame in WebSocket frames up to its own frame limit, so the server accepts
+        // WebSocket frames as large as the bodies it accepts
+        if (effectiveHttpOptions.getMaxWebSocketFrameSize() < stompOptions.getMaxBodyLength()) {
+            effectiveHttpOptions.setMaxWebSocketFrameSize(stompOptions.getMaxBodyLength());
+        }
+
+        httpServer = vertx.createHttpServer(effectiveHttpOptions)
                           .requestHandler(effectiveRouter)
                           .exceptionHandler(event -> log.error(
                                   "Stomp server Exception before completing Client Connection",

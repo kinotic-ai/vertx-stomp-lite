@@ -1,0 +1,121 @@
+package io.vertx.ext.stomp.lite.client;
+
+import io.vertx.core.http.WebSocketClientOptions;
+import io.vertx.core.json.JsonObject;
+import io.vertx.ext.stomp.lite.StompServerOptions;
+import io.vertx.ext.stomp.lite.frame.Frame;
+
+import java.util.Objects;
+
+/**
+ * STOMP client options. The WebSocket transport, TLS included, is configured through the Vert.x
+ * {@link WebSocketClientOptions} these options carry.
+ *
+ * Created by Navid Mitchell on 2026-10-25.
+ */
+public class StompClientOptions {
+
+    public static final int DEFAULT_MAX_FRAME_SIZE = StompServerOptions.DEFAULT_MAX_BODY_LENGTH;
+    public static final long DEFAULT_CONNECT_TIMEOUT = 10_000;
+
+    private WebSocketClientOptions webSocketClientOptions = new WebSocketClientOptions();
+    private int maxFrameSize = DEFAULT_MAX_FRAME_SIZE;
+    private long connectTimeout = DEFAULT_CONNECT_TIMEOUT;
+    private JsonObject heartbeat = new JsonObject().put("x", 30000).put("y", 30000);
+
+    /**
+     * Gets the options of the Vert.x WebSocket client that carries the STOMP frames, which hold the TLS
+     * configuration.
+     *
+     * @return the WebSocket client options
+     */
+    public WebSocketClientOptions getWebSocketClientOptions() {
+        return webSocketClientOptions;
+    }
+
+    /**
+     * Sets the options of the Vert.x WebSocket client that carries the STOMP frames. The maximum WebSocket frame
+     * size is set from {@link #getMaxFrameSize()} when the client is created.
+     *
+     * @param webSocketClientOptions the WebSocket client options, must not be {@code null}
+     * @return the current {@link StompClientOptions}
+     */
+    public StompClientOptions setWebSocketClientOptions(WebSocketClientOptions webSocketClientOptions) {
+        this.webSocketClientOptions = Objects.requireNonNull(webSocketClientOptions, "webSocketClientOptions must not be null");
+        return this;
+    }
+
+    /**
+     * Gets the size a STOMP frame body must stay under, in bytes. A body reaching it, or a WebSocket frame
+     * exceeding it, closes the connection with an error. The WebSocket frames the client writes are sized by it
+     * too, so the server must accept WebSocket frames this large. 10 MB by default.
+     *
+     * @return the maximum frame size in bytes
+     */
+    public int getMaxFrameSize() {
+        return maxFrameSize;
+    }
+
+    /**
+     * Sets the size a STOMP frame body must stay under, in bytes.
+     *
+     * @param maxFrameSize the maximum frame size in bytes, at least 1
+     * @return the current {@link StompClientOptions}
+     */
+    public StompClientOptions setMaxFrameSize(int maxFrameSize) {
+        if (maxFrameSize < 1) {
+            throw new IllegalArgumentException("maxFrameSize must be at least 1 byte but was " + maxFrameSize);
+        }
+        this.maxFrameSize = maxFrameSize;
+        return this;
+    }
+
+    /**
+     * Gets the time the server has to answer the CONNECT frame once the WebSocket is open, in milliseconds. A
+     * connection the server has not accepted by then fails and its WebSocket is closed. 10 s by default.
+     *
+     * @return the connect timeout in milliseconds
+     */
+    public long getConnectTimeout() {
+        return connectTimeout;
+    }
+
+    /**
+     * Sets the time the server has to answer the CONNECT frame once the WebSocket is open.
+     *
+     * @param connectTimeout the connect timeout in milliseconds, at least 1
+     * @return the current {@link StompClientOptions}
+     */
+    public StompClientOptions setConnectTimeout(long connectTimeout) {
+        if (connectTimeout < 1) {
+            throw new IllegalArgumentException("connectTimeout must be at least 1 ms but was " + connectTimeout);
+        }
+        this.connectTimeout = connectTimeout;
+        return this;
+    }
+
+    /**
+     * Gets the heartbeat the client offers in its CONNECT frame: {@code x} is the interval in milliseconds at
+     * which the client can send heartbeats, {@code y} the interval at which it wants to receive them. Either can
+     * be {@code 0} to turn that direction off. Defaults to 30 s both ways.
+     *
+     * @return the heartbeat configuration
+     * @see Frame.Heartbeat
+     */
+    public JsonObject getHeartbeat() {
+        return heartbeat;
+    }
+
+    /**
+     * Sets the heartbeat the client offers in its CONNECT frame.
+     *
+     * @param heartbeat the heartbeat configuration, {@code {"x": millis, "y": millis}}
+     * @return the current {@link StompClientOptions}
+     * @see Frame.Heartbeat
+     */
+    public StompClientOptions setHeartbeat(JsonObject heartbeat) {
+        this.heartbeat = Objects.requireNonNull(heartbeat, "heartbeat must not be null");
+        return this;
+    }
+
+}
