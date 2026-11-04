@@ -28,7 +28,6 @@ import io.vertx.ext.web.Router;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -81,16 +80,9 @@ public class StompServerVerticle extends VerticleBase {
 
         // the client requests the STOMP sub-protocol, and a handshake that does not echo it fails on the client
         HttpServerOptions effectiveHttpOptions = new HttpServerOptions(httpOptions);
-        List<String> subProtocols = httpOptions.getWebSocketSubProtocols();
+        List<String> subProtocols = effectiveHttpOptions.getWebSocketSubProtocols();
         if (subProtocols == null || !subProtocols.contains(Frame.WEBSOCKET_SUB_PROTOCOL)) {
-            List<String> withStomp = new ArrayList<>(subProtocols != null ? subProtocols : List.of());
-            withStomp.add(Frame.WEBSOCKET_SUB_PROTOCOL);
-            effectiveHttpOptions.setWebSocketSubProtocols(withStomp);
-        }
-        // a client writes a STOMP frame in WebSocket frames up to its own frame limit, so the server accepts
-        // WebSocket frames as large as the bodies it accepts
-        if (effectiveHttpOptions.getMaxWebSocketFrameSize() < stompOptions.getMaxBodyLength()) {
-            effectiveHttpOptions.setMaxWebSocketFrameSize(stompOptions.getMaxBodyLength());
+            effectiveHttpOptions.addWebSocketSubProtocol(Frame.WEBSOCKET_SUB_PROTOCOL);
         }
 
         httpServer = vertx.createHttpServer(effectiveHttpOptions)

@@ -107,9 +107,15 @@ public class FrameParser implements Handler<Buffer> {
       case HEADERS:
         if (isEmpty(buffer)) {
           // End of headers.
-          current = State.BODY;
           String length = headers.get(Frame.CONTENT_LENGTH);
-          int contentLength = length != null ? Integer.parseInt(length) : 0;
+          int contentLength;
+          try {
+            contentLength = length != null ? Integer.parseInt(length) : 0;
+          } catch (NumberFormatException e) {
+            reportOrThrow("Invalid content-length: '" + length + "'");
+            return;
+          }
+          current = State.BODY;
           // RecordParser rejects a fixed size of 0, so an empty body declared with content-length is read up to
           // the NULL terminator like a body with no declared length
           if (contentLength > 0) {

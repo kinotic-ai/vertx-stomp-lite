@@ -33,7 +33,8 @@ class DefaultStompClient implements StompClient {
         this.vertx = vertx;
         this.context = (ContextInternal) vertx.getOrCreateContext();
         this.options = options;
-        // the STOMP frame limit bounds the WebSocket frames carrying the STOMP frames too
+        // the STOMP frame limit bounds the WebSocket frames the client accepts; the frames it writes are sized by
+        // the connection
         WebSocketClientOptions webSocketClientOptions = new WebSocketClientOptions(options.getWebSocketClientOptions())
                 .setMaxFrameSize(options.getMaxFrameSize());
         this.webSocketClient = vertx.createWebSocketClient(webSocketClientOptions);
@@ -63,7 +64,7 @@ class DefaultStompClient implements StompClient {
                                                          String host = effectiveOptions.getHost() != null
                                                                  ? effectiveOptions.getHost()
                                                                  : webSocket.remoteAddress().host();
-                                                         new DefaultStompClientConnection(vertx, webSocket, options)
+                                                         new DefaultStompClientConnection(context, webSocket, options)
                                                                  .connect(host, connectHeaders, promise);
                                                      } catch (Exception e) {
                                                          // the socket is open and nothing else holds it

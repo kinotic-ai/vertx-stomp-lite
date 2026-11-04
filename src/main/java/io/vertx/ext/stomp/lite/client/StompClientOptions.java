@@ -47,8 +47,8 @@ public class StompClientOptions {
 
     /**
      * Gets the size a STOMP frame body must stay under, in bytes. A body reaching it, or a WebSocket frame
-     * exceeding it, closes the connection with an error. The WebSocket frames the client writes are sized by it
-     * too, so the server must accept WebSocket frames this large. 10 MB by default.
+     * exceeding it, closes the connection with an error. The client writes WebSocket frames of at most 64 KB,
+     * Vert.x's default limit, whatever size it accepts. 10 MB by default.
      *
      * @return the maximum frame size in bytes
      */
@@ -71,8 +71,10 @@ public class StompClientOptions {
     }
 
     /**
-     * Gets the time the server has to answer the CONNECT frame once the WebSocket is open, in milliseconds. A
-     * connection the server has not accepted by then fails and its WebSocket is closed. 10 s by default.
+     * Gets the time the server has to answer the CONNECT frame once the WebSocket is open, and the DISCONNECT
+     * frame of {@link StompClientConnection#disconnect()}, in milliseconds. A connection the server has not
+     * accepted by then fails and its WebSocket is closed; a disconnect it has not answered by then closes the
+     * WebSocket. 10 s by default.
      *
      * @return the connect timeout in milliseconds
      */
@@ -81,7 +83,8 @@ public class StompClientOptions {
     }
 
     /**
-     * Sets the time the server has to answer the CONNECT frame once the WebSocket is open.
+     * Sets the time the server has to answer the CONNECT frame once the WebSocket is open, and the DISCONNECT
+     * frame on disconnect.
      *
      * @param connectTimeout the connect timeout in milliseconds, at least 1
      * @return the current {@link StompClientOptions}

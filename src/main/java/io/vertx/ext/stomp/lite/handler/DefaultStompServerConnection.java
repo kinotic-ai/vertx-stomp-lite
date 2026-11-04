@@ -38,6 +38,7 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
 
     private boolean connected = false;
     private boolean closed = false;
+    private boolean closing = false;
     private volatile long lastClientActivity;
     private long serverHeartbeat = -1;
     private long clientHeartbeat = -1;
@@ -128,6 +129,9 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
         if (receipt != null) {
             error.addHeader(Frame.RECEIPT_ID, receipt);
         }
+        // STOMP has the server process nothing after an ERROR frame, so a frame already buffered behind the one
+        // it answers is dropped rather than handled before the close
+        closing = true;
         Promise<Void> ret = Promise.promise();
         write(error)
                 .onComplete(event -> {
@@ -236,7 +240,9 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
 
     @Override
     public void handle(Frame frame) {
-        if(!closed) {
+        if (closed) {
+            log.error("THIS SHOULD NEVER HAPPEN!! Frame Handler called after close.");
+        } else if (!closing) {
             try {
                 switch (frame.getCommand()) {
                     case CONNECT:
@@ -341,8 +347,6 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
                 // a STOMP ERROR frame so the client sees a diagnostic instead of a bare WS close.
                 clientCausedException(e, frame);
             }
-        } else {
-            log.error("THIS SHOULD NEVER HAPPEN!! Frame Handler called after close.");
         }
     }
 

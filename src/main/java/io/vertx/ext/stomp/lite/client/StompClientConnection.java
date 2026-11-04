@@ -49,7 +49,8 @@ public interface StompClientConnection {
     Future<Void> subscribe(String id, String destination, Map<String, String> headers, Handler<Frame> messageHandler);
 
     /**
-     * Sends an UNSUBSCRIBE frame and stops routing messages to the subscription's handler.
+     * Sends an UNSUBSCRIBE frame and stops routing messages to the subscription's handler once the frame is written;
+     * a MESSAGE the server sent before it processed the frame is dropped.
      *
      * @param id the subscription id
      * @return a future completed when the frame is written
@@ -57,8 +58,8 @@ public interface StompClientConnection {
     Future<Void> unsubscribe(String id);
 
     /**
-     * Sends a DISCONNECT frame with a receipt and closes the connection once the server answers with the RECEIPT
-     * or closes the connection itself.
+     * Sends a DISCONNECT frame with a receipt and closes the connection once the server answers with the RECEIPT,
+     * closes the connection itself, or has done neither within {@link StompClientOptions#getConnectTimeout()}.
      *
      * @return a future completed when the connection is closed
      */

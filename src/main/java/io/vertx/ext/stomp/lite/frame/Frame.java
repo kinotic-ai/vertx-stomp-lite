@@ -141,12 +141,18 @@ public class Frame {
      * @return the heartbeat configuration
      */
     public static Heartbeat parse(String header) {
+      Heartbeat ret;
       if (header == null) {
-        return new Heartbeat(0, 0);
+        ret = new Heartbeat(0, 0);
       } else {
         String[] token = header.split(FrameParser.COMMA);
-        return new Heartbeat(Integer.parseInt(token[0]), Integer.parseInt(token[1]));
+        try {
+          ret = new Heartbeat(Integer.parseInt(token[0].trim()), Integer.parseInt(token[1].trim()));
+        } catch (ArrayIndexOutOfBoundsException | NumberFormatException e) {
+          throw new IllegalArgumentException("Invalid heart-beat header: '" + header + "'", e);
+        }
       }
+      return ret;
     }
 
     /**

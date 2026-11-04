@@ -7,6 +7,8 @@ import io.vertx.core.Vertx;
 import io.vertx.core.VertxException;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.WebSocket;
+import io.vertx.core.http.WebSocketClientOptions;
+import io.vertx.core.http.WebSocketFrame;
 import io.vertx.core.internal.ContextInternal;
 import io.vertx.ext.stomp.lite.StompServerOptions;
 import io.vertx.ext.stomp.lite.frame.Frame;
@@ -37,8 +39,9 @@ class DefaultStompClientConnection implements StompClientConnection {
 
     private static final String ACCEPT_VERSION = "1.2";
     private static final String DISCONNECT_RECEIPT_PREFIX = "disconnect-";
+    // a frame of Vert.x's default size reaches a server whatever frame size it accepts
+    private static final int WEBSOCKET_FRAME_SIZE = WebSocketClientOptions.DEFAULT_MAX_FRAME_SIZE;
 
-    private final Vertx vertx;
     private final ContextInternal context;
     private final WebSocket webSocket;
     private final StompClientOptions options;
@@ -59,9 +62,8 @@ class DefaultStompClientConnection implements StompClientConnection {
     private long incomingHeartbeatTimer = -1;
     private long lastReadNanos;
 
-    DefaultStompClientConnection(Vertx vertx, WebSocket webSocket, StompClientOptions options) {
-        this.vertx = vertx;
-        this.context = (ContextInternal) vertx.getOrCreateContext();
+    DefaultStompClientConnection(ContextInternal context, WebSocket webSocket, StompClientOptions options) {
+        this.context = context;
         this.closedPromise = context.promise();
         this.webSocket = webSocket;
         this.options = options;
@@ -93,7 +95,7 @@ class DefaultStompClientConnection implements StompClientConnection {
             }
         });
         // a server that opened the socket and never answers CONNECT would otherwise hold the caller and the socket
-        connectTimer = vertx.setTimer(options.getConnectTimeout(), id -> {
+        connectTimer = context.setTimer(options.getConnectTimeout(), id -> {
             connectTimer = -1;
             terminate(new VertxException("The server did not answer the CONNECT frame within " + options.getConnectTimeout() + " ms", true));
         });
@@ -149,8 +151,10 @@ class DefaultStompClientConnection implements StompClientConnection {
     public Future<Void> unsubscribe(String id) {
         Objects.requireNonNull(id, "id must not be null");
         return onContext(() -> {
-            subscriptions.remove(id);
-            return write(new Frame(Frame.Command.UNSUBSCRIBE, Headers.create(Frame.ID, id), null));
+            Future<Void> ret = write(new Frame(Frame.Command.UNSUBSCRIBE, Headers.create(Frame.ID, id), null));
+            // the handler stays until the frame is written, so a MESSAGE already in flight still reaches it
+            ret.onComplete(ar -> subscriptions.remove(id));
+            return ret;
         });
     }
 
@@ -159,9 +163,11 @@ class DefaultStompClientConnection implements StompClientConnection {
         return onContext(() -> {
             if (!closed) {
                 String receipt = DISCONNECT_RECEIPT_PREFIX + UUID.randomUUID();
-                // the server closes the connection after the RECEIPT, and a server that closes without one has
-                // disconnected the client all the same, so either outcome ends in the close
+                // the server closes the connection after the RECEIPT; one that closes without a RECEIPT, or answers
+                // nothing within the connect timeout, has disconnected the client all the same, so every outcome
+                // ends in the close
                 writeAwaitingReceipt(new Frame(Frame.Command.DISCONNECT, Headers.create(Frame.RECEIPT, receipt), null))
+                        .timeout(options.getConnectTimeout(), TimeUnit.MILLISECONDS)
                         .onComplete(ar -> close());
             }
             return closedPromise.future();
@@ -241,7 +247,8 @@ class DefaultStompClientConnection implements StompClientConnection {
         if (handler != null) {
             callUserCode(() -> handler.handle(frame));
         } else {
-            log.warn("Dropping a MESSAGE frame for the unknown subscription {}", frame.getHeader(Frame.SUBSCRIPTION));
+            // a MESSAGE the server sent before it processed an UNSUBSCRIBE arrives here
+            log.debug("Dropping a MESSAGE frame for the subscription {}, which is not subscribed", frame.getHeader(Frame.SUBSCRIPTION));
         }
     }
 
@@ -281,12 +288,12 @@ class DefaultStompClientConnection implements StompClientConnection {
         if (outgoingPeriod > 0) {
             // sent every period whatever else was written, so the gap the server measures stays one period and
             // never nears its cutoff of two
-            outgoingHeartbeatTimer = vertx.setPeriodic(outgoingPeriod, id -> write(Frames.ping()));
+            outgoingHeartbeatTimer = context.setPeriodic(outgoingPeriod, id -> write(Frames.ping()));
         }
         if (incomingPeriod > 0) {
             // the same margin the server grants a client: two periods, so a heartbeat delayed by scheduling
             // does not end the connection
-            incomingHeartbeatTimer = vertx.setPeriodic(incomingPeriod, id -> {
+            incomingHeartbeatTimer = context.setPeriodic(incomingPeriod, id -> {
                 long silentMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - lastReadNanos);
                 if (silentMillis > incomingPeriod * 2) {
                     terminate(new VertxException("No data received from the server in the last " + silentMillis
@@ -298,18 +305,18 @@ class DefaultStompClientConnection implements StompClientConnection {
 
     private void cancelConnectTimer() {
         if (connectTimer != -1) {
-            vertx.cancelTimer(connectTimer);
+            context.owner().cancelTimer(connectTimer);
             connectTimer = -1;
         }
     }
 
     private void cancelHeartbeat() {
         if (outgoingHeartbeatTimer != -1) {
-            vertx.cancelTimer(outgoingHeartbeatTimer);
+            context.owner().cancelTimer(outgoingHeartbeatTimer);
             outgoingHeartbeatTimer = -1;
         }
         if (incomingHeartbeatTimer != -1) {
-            vertx.cancelTimer(incomingHeartbeatTimer);
+            context.owner().cancelTimer(incomingHeartbeatTimer);
             incomingHeartbeatTimer = -1;
         }
     }
@@ -347,8 +354,18 @@ class DefaultStompClientConnection implements StompClientConnection {
         Future<Void> ret;
         if (closed) {
             ret = context.failedFuture(closedException());
-        } else {
+        } else if (buffer.length() <= WEBSOCKET_FRAME_SIZE) {
             ret = webSocket.writeBinaryMessage(buffer);
+        } else {
+            // written as one message in frames of the default size, which the receiving parser reassembles
+            ret = null;
+            for (int offset = 0; offset < buffer.length(); offset += WEBSOCKET_FRAME_SIZE) {
+                int end = Math.min(offset + WEBSOCKET_FRAME_SIZE, buffer.length());
+                Buffer part = buffer.slice(offset, end);
+                boolean last = end == buffer.length();
+                ret = webSocket.writeFrame(offset == 0 ? WebSocketFrame.binaryFrame(part, last)
+                                                       : WebSocketFrame.continuationFrame(part, last));
+            }
         }
         return ret;
     }
