@@ -18,7 +18,8 @@ import java.util.Map;
 public interface StompClient {
 
     /**
-     * Creates a client bound to the current Vert.x context, or to a new one when there is none.
+     * Creates a client bound to the current Vert.x context, or to a new one when there is none. The client keeps a
+     * copy of the options.
      *
      * @param vertx   the Vert.x instance
      * @param options the client options

@@ -30,7 +30,8 @@ class DefaultStompClient implements StompClient {
         Objects.requireNonNull(vertx, "vertx must not be null");
         Objects.requireNonNull(options, "options must not be null");
         this.context = (ContextInternal) vertx.getOrCreateContext();
-        this.options = options;
+        // copied once, so every connection of the client is made with the same options
+        this.options = new StompClientOptions(options);
         // the STOMP frame limit bounds the WebSocket frames the client accepts; the frames it writes are sized by
         // the connection
         WebSocketClientOptions webSocketClientOptions = new WebSocketClientOptions(options.getWebSocketClientOptions())

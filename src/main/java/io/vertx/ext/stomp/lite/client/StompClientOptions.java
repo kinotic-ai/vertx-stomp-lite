@@ -23,6 +23,21 @@ public class StompClientOptions {
     private long connectTimeout = DEFAULT_CONNECT_TIMEOUT;
     private JsonObject heartbeat = new JsonObject().put("x", 30000).put("y", 30000);
 
+    public StompClientOptions() {
+    }
+
+    /**
+     * Copies the options.
+     *
+     * @param other the options to copy
+     */
+    public StompClientOptions(StompClientOptions other) {
+        this.webSocketClientOptions = new WebSocketClientOptions(other.webSocketClientOptions);
+        this.maxFrameSize = other.maxFrameSize;
+        this.connectTimeout = other.connectTimeout;
+        this.heartbeat = other.heartbeat.copy();
+    }
+
     /**
      * Gets the options of the Vert.x WebSocket client that carries the STOMP frames, which hold the TLS
      * configuration.

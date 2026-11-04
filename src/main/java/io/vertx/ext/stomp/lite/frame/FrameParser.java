@@ -112,6 +112,9 @@ public class FrameParser implements Handler<Buffer> {
           try {
             contentLength = length != null ? Integer.parseInt(length) : 0;
           } catch (NumberFormatException e) {
+            contentLength = -1;
+          }
+          if (contentLength < 0) {
             reportOrThrow("Invalid content-length: '" + length + "'");
             return;
           }
