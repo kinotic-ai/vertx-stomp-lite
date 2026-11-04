@@ -240,9 +240,9 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
 
     @Override
     public void handle(Frame frame) {
-        if (closed) {
-            log.error("THIS SHOULD NEVER HAPPEN!! Frame Handler called after close.");
-        } else if (!closing) {
+        // nothing is processed once the connection is closing or closed: STOMP has the server stop after the ERROR
+        // frame it answered with, and a frame behind a DISCONNECT or a close is dropped the same way
+        if (!closed && !closing) {
             try {
                 switch (frame.getCommand()) {
                     case CONNECT:
@@ -375,6 +375,8 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
             // Spec says: if the server and the client do not share any common protocol versions, then the server MUST respond with an error.
             throw new IllegalStateException("Client protocol requirement does not mach versions supported by the server.");
         }
+        // parsed before the frame is answered, so an invalid header is answered with an ERROR frame
+        Frame.Heartbeat clientHeartbeat = Frame.Heartbeat.parse(frame.getHeader(Frame.HEARTBEAT));
 
         // Now process the client CONNECT frame
         stompServerHandler
@@ -392,7 +394,6 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
                                 .onComplete(ar -> {
                                     if (ar.succeeded()) {
                                         // now that we are connected Compute heartbeat, and register serverHeartbeat and clientHeartbeat
-                                        Frame.Heartbeat clientHeartbeat = Frame.Heartbeat.parse(frame.getHeader(Frame.HEARTBEAT));
                                         Frame.Heartbeat serverHeartbeat = Frame.Heartbeat.create(options.getHeartbeat());
                                         long clientHeartbeatPeriod = Frame.Heartbeat.computeClientHeartbeatPeriod(clientHeartbeat,
                                                                                                                   serverHeartbeat);

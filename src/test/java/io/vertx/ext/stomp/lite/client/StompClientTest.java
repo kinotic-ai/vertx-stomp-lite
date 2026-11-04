@@ -1,6 +1,7 @@
 package io.vertx.ext.stomp.lite.client;
 
 import io.vertx.core.Future;
+import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpServer;
@@ -23,7 +24,9 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
@@ -202,29 +205,105 @@ public class StompClientTest {
     public void malformedContentLengthEndsTheConnection() throws Exception {
         startServer(headers -> Future.succeededFuture(Collections.emptyMap()), new StompServerOptions());
         // a raw client, since the client never writes such a frame
-        WebSocketClient rawClient = vertx.createWebSocketClient();
-        WebSocket socket = rawClient.connect(new WebSocketConnectOptions().setHost("localhost")
-                                                                         .setPort(port)
-                                                                         .setURI(WEBSOCKET_PATH)
-                                                                         .addSubProtocol(Frame.WEBSOCKET_SUB_PROTOCOL))
-                                    .await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        LinkedBlockingQueue<Frame> frames = new LinkedBlockingQueue<>();
         CompletableFuture<Void> closed = new CompletableFuture<>();
-        socket.closeHandler(v -> closed.complete(null));
-        CompletableFuture<Frame> connected = new CompletableFuture<>();
-        FrameParser parser = new FrameParser();
-        parser.handler(connected::complete);
-        socket.handler(parser);
+        WebSocket socket = openRawSocket(frames::add, closed);
         socket.writeBinaryMessage(new Frame(Frame.Command.CONNECT,
                                             Headers.create(Frame.ACCEPT_VERSION, "1.2", Frame.HOST, "localhost"),
                                             null).toBuffer());
-        assertEquals(Frame.Command.CONNECTED, connected.get(TIMEOUT_SECONDS, TimeUnit.SECONDS).getCommand());
+        assertEquals(Frame.Command.CONNECTED, frames.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS).getCommand());
 
         // a frame the server cannot parse ends the connection instead of leaving the parser mid-frame
         socket.writeBinaryMessage(Buffer.buffer("SEND\ndestination:/queue/orders\ncontent-length:abc\n\nhello\0"));
 
         closed.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
         assertTrue(handler.sendFrames().isEmpty());
-        rawClient.close().await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+    }
+
+    @Test
+    public void invalidClientHeartbeatIsAnsweredWithAnError() throws Exception {
+        startServer(headers -> Future.succeededFuture(Collections.emptyMap()), new StompServerOptions());
+        LinkedBlockingQueue<Frame> frames = new LinkedBlockingQueue<>();
+        CompletableFuture<Void> closed = new CompletableFuture<>();
+        WebSocket socket = openRawSocket(frames::add, closed);
+
+        socket.writeBinaryMessage(new Frame(Frame.Command.CONNECT,
+                                            Headers.create(Frame.ACCEPT_VERSION, "1.2", Frame.HOST, "localhost", Frame.HEARTBEAT, "soon"),
+                                            null).toBuffer());
+
+        Frame answer = frames.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        assertNotNull(answer);
+        assertEquals(Frame.Command.ERROR, answer.getCommand());
+        assertTrue(answer.getHeader(Frame.MESSAGE), answer.getHeader(Frame.MESSAGE).contains("heart-beat"));
+        closed.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+    }
+
+    @Test
+    public void outgoingHeartbeatKeepsTheConnectionAlive() throws Exception {
+        // the server wants a heartbeat every 200 ms and drops a client silent for two of them
+        startServer(headers -> Future.succeededFuture(Collections.emptyMap()),
+                    new StompServerOptions().setHeartbeat(new JsonObject().put("x", 0).put("y", 200)));
+        client = StompClient.create(vertx, new StompClientOptions().setHeartbeat(new JsonObject().put("x", 200).put("y", 0)));
+        StompClientConnection connection = connect(Collections.emptyMap());
+        CompletableFuture<Throwable> closeCause = new CompletableFuture<>();
+        connection.closeHandler(closeCause::complete);
+
+        Thread.sleep(1500);
+
+        assertFalse(closeCause.isDone());
+        assertTrue(connection.isConnected());
+    }
+
+    @Test
+    public void errorHandlerRunsBeforeTheCloseHandler() throws Exception {
+        startServer(headers -> Future.succeededFuture(Collections.emptyMap()), new StompServerOptions());
+        client = StompClient.create(vertx, new StompClientOptions());
+        StompClientConnection connection = connect(Collections.emptyMap());
+        List<String> order = new CopyOnWriteArrayList<>();
+        CompletableFuture<Void> closed = new CompletableFuture<>();
+        connection.errorHandler(frame -> order.add("error " + frame.getHeader(Frame.RECEIPT_ID)));
+        connection.closeHandler(cause -> {
+            order.add("close");
+            closed.complete(null);
+        });
+
+        connection.send(RecordingStompServerHandler.REFUSED_DESTINATION, Map.of(Frame.RECEIPT, "r-1"), null);
+
+        closed.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        assertEquals(List.of("error r-1", "close"), order);
+    }
+
+    @Test
+    public void closingTheClientEndsItsConnections() throws Exception {
+        startServer(headers -> Future.succeededFuture(Collections.emptyMap()), new StompServerOptions());
+        client = StompClient.create(vertx, new StompClientOptions());
+        StompClientConnection connection = connect(Collections.emptyMap());
+        CompletableFuture<Throwable> closeCause = new CompletableFuture<>();
+        connection.closeHandler(closeCause::complete);
+
+        client.close().await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+        assertNull(closeCause.get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        assertFalse(connection.isConnected());
+    }
+
+    @Test
+    public void callerNamingNoSubProtocolConnectsToAServerEchoingNone() throws Exception {
+        startScriptedServer(frame -> frame.getCommand() == Frame.Command.CONNECT
+                ? new Frame(Frame.Command.CONNECTED, Headers.create(Frame.VERSION, "1.2", Frame.HEARTBEAT, "0,0"), null)
+                : null, false);
+        client = StompClient.create(vertx, new StompClientOptions());
+        WebSocketConnectOptions options = new WebSocketConnectOptions().setHost("localhost")
+                                                                       .setPort(port)
+                                                                       .setURI(WEBSOCKET_PATH)
+                                                                       .setSubProtocols(List.of());
+
+        StompClientConnection connection = client.connect(options, Collections.emptyMap())
+                                                 .toCompletionStage()
+                                                 .toCompletableFuture()
+                                                 .get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+        assertTrue(connection.isConnected());
     }
 
     @Test
@@ -354,7 +433,15 @@ public class StompClientTest {
 
     // a server that answers each frame with what the script returns, nothing for null, and never closes on its own
     private void startScriptedServer(Function<Frame, Frame> script) throws Exception {
-        HttpServer server = vertx.createHttpServer(new HttpServerOptions().setPort(port).setWebSocketSubProtocols(List.of(Frame.WEBSOCKET_SUB_PROTOCOL)))
+        startScriptedServer(script, true);
+    }
+
+    private void startScriptedServer(Function<Frame, Frame> script, boolean echoingTheSubProtocol) throws Exception {
+        HttpServerOptions httpOptions = new HttpServerOptions().setPort(port);
+        if (echoingTheSubProtocol) {
+            httpOptions.setWebSocketSubProtocols(List.of(Frame.WEBSOCKET_SUB_PROTOCOL));
+        }
+        HttpServer server = vertx.createHttpServer(httpOptions)
                                  .webSocketHandler(socket -> {
                                      FrameParser parser = new FrameParser();
                                      parser.handler(frame -> {
@@ -366,6 +453,21 @@ public class StompClientTest {
                                      socket.handler(parser);
                                  });
         server.listen().await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+    }
+
+    // a WebSocket to the server under the STOMP sub-protocol, whose frames go to the handler
+    private WebSocket openRawSocket(Handler<Frame> frames, CompletableFuture<Void> closed) throws Exception {
+        WebSocketClient rawClient = vertx.createWebSocketClient();
+        WebSocket socket = rawClient.connect(new WebSocketConnectOptions().setHost("localhost")
+                                                                         .setPort(port)
+                                                                         .setURI(WEBSOCKET_PATH)
+                                                                         .addSubProtocol(Frame.WEBSOCKET_SUB_PROTOCOL))
+                                    .await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        socket.closeHandler(v -> closed.complete(null));
+        FrameParser parser = new FrameParser();
+        parser.handler(frames);
+        socket.handler(parser);
+        return socket;
     }
 
     private StompClientConnection connect(Map<String, String> connectHeaders) throws Exception {

@@ -29,9 +29,10 @@ public interface StompClient {
     }
 
     /**
-     * Opens a WebSocket to the server under the {@link Frame#WEBSOCKET_SUB_PROTOCOL} sub-protocol and sends a
-     * CONNECT frame. The frame carries the given headers plus the protocol headers the client owns:
-     * {@code accept-version}, {@code heart-beat} and, when the caller supplied none, {@code host}.
+     * Opens a WebSocket to the server and sends a CONNECT frame. The WebSocket requests the
+     * {@link Frame#WEBSOCKET_SUB_PROTOCOL} sub-protocol when the options name none; a caller naming sub-protocols,
+     * none included, is honoured as is. The frame carries the given headers plus the protocol headers the client
+     * owns: {@code accept-version}, {@code heart-beat} and, when the caller supplied none, {@code host}.
      *
      * @param webSocketOptions where to connect, with any headers the WebSocket upgrade request must carry
      * @param connectHeaders  the headers of the CONNECT frame, such as {@code login} and {@code passcode}

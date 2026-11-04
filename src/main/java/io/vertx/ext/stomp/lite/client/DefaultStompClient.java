@@ -22,7 +22,6 @@ import java.util.Objects;
  */
 class DefaultStompClient implements StompClient {
 
-    private final Vertx vertx;
     private final ContextInternal context;
     private final StompClientOptions options;
     private final WebSocketClient webSocketClient;
@@ -30,7 +29,6 @@ class DefaultStompClient implements StompClient {
     DefaultStompClient(Vertx vertx, StompClientOptions options) {
         Objects.requireNonNull(vertx, "vertx must not be null");
         Objects.requireNonNull(options, "options must not be null");
-        this.vertx = vertx;
         this.context = (ContextInternal) vertx.getOrCreateContext();
         this.options = options;
         // the STOMP frame limit bounds the WebSocket frames the client accepts; the frames it writes are sized by
@@ -48,14 +46,11 @@ class DefaultStompClient implements StompClient {
         // would drop it
         Promise<StompClientConnection> promise = context.promise();
         WebSocketConnectOptions effectiveOptions = new WebSocketConnectOptions(webSocketOptions);
-        // the copy shares the caller's sub-protocol list, so the sub-protocol is added to a list of the client's own
-        List<String> subProtocols = new ArrayList<>(effectiveOptions.getSubProtocols() != null
-                                                            ? effectiveOptions.getSubProtocols()
-                                                            : List.of());
-        if (!subProtocols.contains(Frame.WEBSOCKET_SUB_PROTOCOL)) {
-            subProtocols.add(Frame.WEBSOCKET_SUB_PROTOCOL);
+        // a server that echoes no sub-protocol fails a handshake that requested one, so a caller naming its own,
+        // none included, is honoured as is
+        if (effectiveOptions.getSubProtocols() == null) {
+            effectiveOptions.setSubProtocols(new ArrayList<>(List.of(Frame.WEBSOCKET_SUB_PROTOCOL)));
         }
-        effectiveOptions.setSubProtocols(subProtocols);
         // connecting from the client's context binds the socket, and so every handler, to that context
         context.runOnContext(v -> webSocketClient.connect(effectiveOptions)
                                                  .onFailure(promise::fail)

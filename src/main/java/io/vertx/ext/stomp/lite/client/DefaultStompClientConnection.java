@@ -39,7 +39,7 @@ class DefaultStompClientConnection implements StompClientConnection {
 
     private static final String ACCEPT_VERSION = "1.2";
     private static final String DISCONNECT_RECEIPT_PREFIX = "disconnect-";
-    // a frame of Vert.x's default size reaches a server whatever frame size it accepts
+    // a server at Vert.x's default frame size accepts frames of that size
     private static final int WEBSOCKET_FRAME_SIZE = WebSocketClientOptions.DEFAULT_MAX_FRAME_SIZE;
 
     private final ContextInternal context;
@@ -151,10 +151,8 @@ class DefaultStompClientConnection implements StompClientConnection {
     public Future<Void> unsubscribe(String id) {
         Objects.requireNonNull(id, "id must not be null");
         return onContext(() -> {
-            Future<Void> ret = write(new Frame(Frame.Command.UNSUBSCRIBE, Headers.create(Frame.ID, id), null));
-            // the handler stays until the frame is written, so a MESSAGE already in flight still reaches it
-            ret.onComplete(ar -> subscriptions.remove(id));
-            return ret;
+            subscriptions.remove(id);
+            return write(new Frame(Frame.Command.UNSUBSCRIBE, Headers.create(Frame.ID, id), null));
         });
     }
 
@@ -233,9 +231,10 @@ class DefaultStompClientConnection implements StompClientConnection {
             terminate(new VertxException("The server sent a second CONNECTED frame", true));
         } else {
             cancelConnectTimer();
+            // parsed before the frame counts as the connection's, so a header the client cannot read fails the connect
+            Frame.Heartbeat serverHeartbeat = Frame.Heartbeat.parse(frame.getHeader(Frame.HEARTBEAT));
             connectedFrame = frame;
-            configureHeartbeat(Frame.Heartbeat.create(options.getHeartbeat()),
-                               Frame.Heartbeat.parse(frame.getHeader(Frame.HEARTBEAT)));
+            configureHeartbeat(Frame.Heartbeat.create(options.getHeartbeat()), serverHeartbeat);
             Promise<StompClientConnection> promise = connectPromise;
             connectPromise = null;
             promise.tryComplete(this);
@@ -266,20 +265,24 @@ class DefaultStompClientConnection implements StompClientConnection {
     // frame naming no receipt fails every pending operation, since any of them may be the one it answers. The
     // connection is ended here too, so a server that fails to close is not waited on.
     private void handleError(Frame frame) {
-        StompErrorException error = new StompErrorException(frame);
-        String receiptId = frame.getHeader(Frame.RECEIPT_ID);
-        if (receiptId == null) {
-            failPendingReceipts(error);
-        } else {
-            Promise<Void> promise = pendingReceipts.remove(receiptId);
-            if (promise != null) {
-                promise.fail(error);
+        if (!closed) {
+            StompErrorException error = new StompErrorException(frame);
+            // closed with its cause first, so a close() from a handler run here changes nothing
+            Handler<Throwable> onClose = beginClose(error);
+            String receiptId = frame.getHeader(Frame.RECEIPT_ID);
+            if (receiptId == null) {
+                failPendingReceipts(error);
+            } else {
+                Promise<Void> refused = pendingReceipts.remove(receiptId);
+                if (refused != null) {
+                    refused.fail(error);
+                }
             }
+            if (errorHandler != null) {
+                callUserCode(() -> errorHandler.handle(frame));
+            }
+            finishClose(error, onClose);
         }
-        if (errorHandler != null) {
-            callUserCode(() -> errorHandler.handle(frame));
-        }
-        terminate(error);
     }
 
     private void configureHeartbeat(Frame.Heartbeat client, Frame.Heartbeat server) {
@@ -357,40 +360,56 @@ class DefaultStompClientConnection implements StompClientConnection {
         } else if (buffer.length() <= WEBSOCKET_FRAME_SIZE) {
             ret = webSocket.writeBinaryMessage(buffer);
         } else {
-            // written as one message in frames of the default size, which the receiving parser reassembles
-            ret = null;
+            // written as one message in frames of the default size, which a server at that default accepts and
+            // the receiving parser reassembles
+            List<Future<Void>> frames = new ArrayList<>();
             for (int offset = 0; offset < buffer.length(); offset += WEBSOCKET_FRAME_SIZE) {
                 int end = Math.min(offset + WEBSOCKET_FRAME_SIZE, buffer.length());
                 Buffer part = buffer.slice(offset, end);
                 boolean last = end == buffer.length();
-                ret = webSocket.writeFrame(offset == 0 ? WebSocketFrame.binaryFrame(part, last)
-                                                       : WebSocketFrame.continuationFrame(part, last));
+                frames.add(webSocket.writeFrame(offset == 0 ? WebSocketFrame.binaryFrame(part, last)
+                                                            : WebSocketFrame.continuationFrame(part, last)));
             }
+            Promise<Void> written = context.promise();
+            Future.all(frames).<Void>mapEmpty().onComplete(written);
+            ret = written.future();
         }
         return ret;
     }
 
-    // Ends the connection, over the cause or in order with none: everything waiting learns of it at once, and the
-    // close of the socket follows rather than gates it, since a peer that answers nothing would hold the close
-    // handshake open for the WebSocket client's closing timeout
+    // Ends the connection, over the cause or in order with none
     private void terminate(Throwable cause) {
         if (!closed) {
-            closed = true;
-            closeCause = cause;
-            cancelConnectTimer();
-            cancelHeartbeat();
-            failConnect(cause != null ? cause : new VertxException("The connection closed before the CONNECTED frame arrived", true));
-            failPendingReceipts(cause != null
-                                        ? new VertxException("The connection closed before the receipt arrived", cause, true)
-                                        : closedException());
-            subscriptions.clear();
-            if (closeHandler != null) {
-                callUserCode(() -> closeHandler.handle(cause));
-            }
-            closedPromise.tryComplete();
-            if (!webSocket.isClosed()) {
-                webSocket.close();
-            }
+            Handler<Throwable> onClose = beginClose(cause);
+            finishClose(cause, onClose);
+        }
+    }
+
+    // Marks the connection closed with its cause. The close handler set at this moment is the one the close
+    // invokes: one set later, by code the close itself runs, is invoked by closeHandler() and by nothing else
+    private Handler<Throwable> beginClose(Throwable cause) {
+        closed = true;
+        closeCause = cause;
+        return closeHandler;
+    }
+
+    // Everything waiting on the connection learns of its end at once, and the close of the socket follows rather
+    // than gates it, since a peer that answers nothing would hold the close handshake open for the WebSocket
+    // client's closing timeout
+    private void finishClose(Throwable cause, Handler<Throwable> onClose) {
+        cancelConnectTimer();
+        cancelHeartbeat();
+        failConnect(cause != null ? cause : new VertxException("The connection closed before the CONNECTED frame arrived", true));
+        failPendingReceipts(cause != null
+                                    ? new VertxException("The connection closed before the receipt arrived", cause, true)
+                                    : closedException());
+        subscriptions.clear();
+        if (onClose != null) {
+            callUserCode(() -> onClose.handle(cause));
+        }
+        closedPromise.tryComplete();
+        if (!webSocket.isClosed()) {
+            webSocket.close();
         }
     }
 
@@ -408,13 +427,14 @@ class DefaultStompClientConnection implements StompClientConnection {
         pending.forEach(promise -> promise.fail(cause));
     }
 
-    // A subscription, error or close handler runs inline: a throw there is the caller's failure and is logged,
-    // never the connection's. A handler of a returned future runs through the context, which reports its throw
+    // A subscription, error or close handler runs inline: a throw there, an Error included, is the caller's failure
+    // and is logged, never the connection's, which would otherwise be left half closed. A handler of a returned
+    // future runs through the context, which reports its throw
     private void callUserCode(Runnable userCode) {
         try {
             userCode.run();
-        } catch (Exception e) {
-            log.error("A handler of the connection to {} failed", webSocket.remoteAddress(), e);
+        } catch (Throwable t) {
+            log.error("A handler of the connection to {} failed", webSocket.remoteAddress(), t);
         }
     }
 
