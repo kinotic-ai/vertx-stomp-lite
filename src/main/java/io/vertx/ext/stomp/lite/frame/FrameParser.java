@@ -47,7 +47,7 @@ public class FrameParser implements Handler<Buffer> {
   private Frame.Command command;
   private HashMap<String, String> headers = new HashMap<>();
   private Handler<Frame> handler;
-  private int bodyLength = 0;
+  private boolean declaredEmptyBody;
 
   private Handler<FrameException> errorHandler;
 
@@ -122,10 +122,15 @@ public class FrameParser implements Handler<Buffer> {
             reportOrThrow("Invalid content-length: '" + length + "'");
             return;
           }
+          if (hasExceededBodySize(contentLength)) {
+            reportOrThrow("Body size exceeded");
+            return;
+          }
+          declaredEmptyBody = length != null && contentLength == 0;
           current = State.BODY;
           frameParser.maxRecordSize(properties.getMaxBodyLength());
           // RecordParser rejects a fixed size of 0, so an empty body declared with content-length is read up to
-          // the NULL terminator like a body with no declared length
+          // the NULL terminator like a body with no declared length and checked for emptiness once it ends
           if (contentLength > 0) {
             frameParser.fixedSizeMode(contentLength);
           } else {
@@ -163,13 +168,13 @@ public class FrameParser implements Handler<Buffer> {
           break;
         }
       case BODY:
-        if (bodyLength == 0) {
-          // Must accumulate and check before creating the frame
-          bodyLength = buffer.length();
-          if (hasExceededBodySize()) {
-            reportOrThrow("Body size exceeded");
-            return;
-          }
+        if (hasExceededBodySize(buffer.length())) {
+          reportOrThrow("Body size exceeded");
+          return;
+        }
+        if (declaredEmptyBody && buffer.length() > 0) {
+          reportOrThrow("Body does not match content-length: 0");
+          return;
         }
 
         try {
@@ -184,7 +189,7 @@ public class FrameParser implements Handler<Buffer> {
 
   private void reset() {
     command = null;
-    bodyLength = 0;
+    declaredEmptyBody = false;
     headers = new HashMap<>();
     current = State.COMMAND;
     frameParser.delimitedMode(EOL);
@@ -232,17 +237,10 @@ public class FrameParser implements Handler<Buffer> {
    */
   @Override
   public synchronized void handle(Buffer event) {
-    if (current == State.BODY) {
-      bodyLength += event.length();
-      if (hasExceededBodySize()) {
-        reportOrThrow("Body size exceeded");
-        return;
-      }
-    }
     frameParser.handle(event);
   }
 
-  private boolean hasExceededBodySize() {
+  private boolean hasExceededBodySize(int bodyLength) {
     return bodyLength >= properties.getMaxBodyLength();
   }
 
