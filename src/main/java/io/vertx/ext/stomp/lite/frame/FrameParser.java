@@ -69,20 +69,6 @@ public class FrameParser implements Handler<Buffer> {
                .maxRecordSize(maxHeaderLineBytes(properties));
   }
 
-  /**
-   * The size of the largest frame a parser with the given limits accepts, in bytes: the command line and the
-   * headers at their limits, a body under its limit, and the terminators. A transport frame limit set from it
-   * refuses no frame the parser would accept.
-   *
-   * @param options the limits
-   * @return the largest frame length in bytes, capped at {@link Integer#MAX_VALUE}
-   */
-  public static int maxFrameLength(StompServerOptions options) {
-    long lines = (options.getMaxHeaders() + 1L) * (maxHeaderLineBytes(options) + 1L);
-    long length = lines + 1 + options.getMaxBodyLength() + 1;
-    return (int) Math.min(Integer.MAX_VALUE, length);
-  }
-
   public FrameParser() {
     this(new StompServerOptions());
   }

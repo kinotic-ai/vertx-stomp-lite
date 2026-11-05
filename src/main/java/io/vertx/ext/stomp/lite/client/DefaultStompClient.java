@@ -4,12 +4,10 @@ import io.vertx.core.Future;
 import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.WebSocketClient;
-import io.vertx.core.http.WebSocketClientOptions;
 import io.vertx.core.http.WebSocketConnectOptions;
 import io.vertx.core.internal.ContextInternal;
 import io.vertx.ext.stomp.lite.StompServerOptions;
 import io.vertx.ext.stomp.lite.frame.Frame;
-import io.vertx.ext.stomp.lite.frame.FrameParser;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -35,13 +33,10 @@ class DefaultStompClient implements StompClient {
         this.context = (ContextInternal) vertx.getOrCreateContext();
         // copied once, so every connection of the client is made with the same options
         this.options = new StompClientOptions(options);
-        // the parser enforces the body limit, with the header limits at the server defaults; a WebSocket frame
-        // carries the largest STOMP frame those limits allow, so a server that writes a frame whole is refused by
-        // the parser and never by the transport. The frames the client writes are sized by the connection
+        // the parser enforces the body limit, with the header limits at the server defaults; the WebSocket frame
+        // size is the transport's own, on the WebSocket client options
         this.parserOptions = new StompServerOptions().setMaxBodyLength(this.options.getMaxBodyLength());
-        WebSocketClientOptions webSocketClientOptions = new WebSocketClientOptions(options.getWebSocketClientOptions())
-                .setMaxFrameSize(FrameParser.maxFrameLength(parserOptions));
-        this.webSocketClient = vertx.createWebSocketClient(webSocketClientOptions);
+        this.webSocketClient = vertx.createWebSocketClient(this.options.getWebSocketClientOptions());
     }
 
     @Override

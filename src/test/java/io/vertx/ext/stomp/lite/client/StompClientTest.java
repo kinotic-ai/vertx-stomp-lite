@@ -478,7 +478,8 @@ public class StompClientTest {
     @Test
     public void frameWrittenWholeIsAcceptedUpToTheBodyLimit() throws Exception {
         // a scripted server answers SUBSCRIBE with a MESSAGE whose body is just under the limit, written in one
-        // WebSocket frame that the headers push past the body limit
+        // WebSocket frame that the headers push past the body limit; the WebSocket frame size is the transport's own,
+        // so only the body is measured against the limit
         Buffer body = Buffer.buffer(new byte[1023]);
         startScriptedServer(frame -> switch (frame.getCommand()) {
             case CONNECT -> new Frame(Frame.Command.CONNECTED, Headers.create(Frame.VERSION, "1.2"), null);

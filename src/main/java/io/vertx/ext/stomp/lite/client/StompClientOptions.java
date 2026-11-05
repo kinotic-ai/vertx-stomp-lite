@@ -49,9 +49,9 @@ public class StompClientOptions {
     }
 
     /**
-     * Sets the options of the Vert.x WebSocket client that carries the STOMP frames. The maximum WebSocket frame
-     * size is set when the client is created, to carry the largest STOMP frame {@link #getMaxBodyLength()} and the
-     * header limits allow.
+     * Sets the options of the Vert.x WebSocket client that carries the STOMP frames, the maximum WebSocket frame
+     * size included: a server that writes a STOMP frame in one WebSocket frame needs that size to hold the frame
+     * whole, and a Vert.x server fragments a frame at its own maximum.
      *
      * @param webSocketClientOptions the WebSocket client options, must not be {@code null}
      * @return the current {@link StompClientOptions}
@@ -63,9 +63,8 @@ public class StompClientOptions {
 
     /**
      * Gets the size a STOMP frame body must stay under, in bytes. A body reaching it closes the connection with an
-     * error. The WebSocket frames the client accepts carry the largest STOMP frame this and the header limits
-     * allow, whether the server writes a frame whole or in fragments; the frames the client writes are at most
-     * 64 KB, Vert.x's default limit. 10 MB by default.
+     * error. The WebSocket frames that carry a STOMP frame are bounded separately, by the WebSocket client options;
+     * the frames the client writes are at most 64 KB, Vert.x's default limit. 10 MB by default.
      *
      * @return the maximum body length in bytes
      */
