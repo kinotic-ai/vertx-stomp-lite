@@ -146,9 +146,12 @@ public class Frame {
         ret = new Heartbeat(0, 0);
       } else {
         String[] token = header.split(FrameParser.COMMA);
+        if (token.length != 2) {
+          throw new IllegalArgumentException("Invalid heart-beat header: '" + header + "'");
+        }
         try {
           ret = new Heartbeat(Integer.parseInt(token[0].trim()), Integer.parseInt(token[1].trim()));
-        } catch (ArrayIndexOutOfBoundsException | NumberFormatException e) {
+        } catch (NumberFormatException e) {
           throw new IllegalArgumentException("Invalid heart-beat header: '" + header + "'", e);
         }
       }

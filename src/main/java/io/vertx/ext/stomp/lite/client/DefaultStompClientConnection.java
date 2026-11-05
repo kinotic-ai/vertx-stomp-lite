@@ -3,7 +3,6 @@ package io.vertx.ext.stomp.lite.client;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.Promise;
-import io.vertx.core.Vertx;
 import io.vertx.core.VertxException;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.WebSocket;
@@ -186,12 +185,12 @@ class DefaultStompClientConnection implements StompClientConnection {
 
     @Override
     public void close() {
-        runOnContext(() -> terminate(null));
+        context.execute(() -> terminate(null));
     }
 
     @Override
     public StompClientConnection errorHandler(Handler<Frame> handler) {
-        runOnContext(() -> errorHandler = handler);
+        context.execute(() -> errorHandler = handler);
         return this;
     }
 
@@ -199,7 +198,7 @@ class DefaultStompClientConnection implements StompClientConnection {
     public StompClientConnection closeHandler(Handler<Throwable> handler) {
         // set on the context, so a handler set after the close is invoked here and one set before it only by
         // terminate()
-        runOnContext(() -> {
+        context.execute(() -> {
             closeHandler = handler;
             if (closed && handler != null) {
                 callUserCode(() -> handler.handle(closeCause));
@@ -364,8 +363,6 @@ class DefaultStompClientConnection implements StompClientConnection {
         Future<Void> ret;
         if (closed) {
             ret = context.failedFuture(closedException());
-        } else if (buffer.length() <= WEBSOCKET_FRAME_SIZE) {
-            ret = webSocket.writeBinaryMessage(buffer);
         } else {
             // written as one message in frames of the default size, which a server at that default accepts and
             // the receiving parser reassembles
@@ -449,36 +446,20 @@ class DefaultStompClientConnection implements StompClientConnection {
         return new VertxException("The connection is closed", true);
     }
 
-    // The connection's state is only ever touched on its context
+    // The connection's state is only ever touched on its context: the operation runs inline on the context's
+    // thread and is dispatched to it from any other. A throw from the operation is the result's failure
     private <T> Future<T> onContext(Supplier<Future<T>> operation) {
-        Future<T> ret;
-        if (Vertx.currentContext() == context) {
-            ret = attempt(operation);
-        } else {
-            Promise<T> promise = context.promise();
-            context.runOnContext(v -> attempt(operation).onComplete(promise));
-            ret = promise.future();
-        }
-        return ret;
-    }
-
-    private void runOnContext(Runnable task) {
-        if (Vertx.currentContext() == context) {
-            task.run();
-        } else {
-            context.runOnContext(v -> task.run());
-        }
-    }
-
-    // a throw from the operation is the result's failure, from whichever thread the caller came
-    private <T> Future<T> attempt(Supplier<Future<T>> operation) {
-        Future<T> ret;
-        try {
-            ret = operation.get();
-        } catch (Exception e) {
-            ret = context.failedFuture(e);
-        }
-        return ret;
+        Promise<T> promise = context.promise();
+        context.execute(() -> {
+            Future<T> result;
+            try {
+                result = operation.get();
+            } catch (Exception e) {
+                result = context.failedFuture(e);
+            }
+            result.onComplete(promise);
+        });
+        return promise.future();
     }
 
 }
