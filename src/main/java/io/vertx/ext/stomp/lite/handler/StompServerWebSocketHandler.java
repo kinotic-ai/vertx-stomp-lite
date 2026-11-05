@@ -28,6 +28,7 @@ import io.vertx.ext.stomp.lite.StompServerOptions;
 import io.vertx.ext.stomp.lite.frame.FrameParser;
 import io.vertx.ext.stomp.lite.frame.InvalidConnectFrame;
 import io.vertx.ext.web.RoutingContext;
+import io.vertx.ext.web.handler.HttpException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -67,9 +68,23 @@ public class StompServerWebSocketHandler {
                                  .onSuccess(socket -> configureServerWebSocket(socket, stompServerHandler))
                                  .onFailure(throwable -> log.error("Could not upgrade request to WebSocket", throwable));
                     } else {
-                        request.response().setStatusCode(HttpResponseStatus.UNAUTHORIZED.code()).end();
+                        request.response().setStatusCode(failureStatus(ar.cause())).end();
                     }
                 });
+    }
+
+    // an HttpException is the handler's verdict on the request and names the status to answer with; any other
+    // failure is one the handler did not classify, which is a server error
+    private static int failureStatus(Throwable cause) {
+        int ret;
+        if (cause instanceof HttpException rejection) {
+            ret = rejection.getStatusCode();
+            log.debug("The handshake was rejected with status {}", ret, cause);
+        } else {
+            ret = HttpResponseStatus.INTERNAL_SERVER_ERROR.code();
+            log.error("The handshake failed", cause);
+        }
+        return ret;
     }
 
     private void configureServerWebSocket(ServerWebSocket socket, StompServerHandler stompServerHandler) {

@@ -4,6 +4,7 @@ import io.vertx.core.Future;
 import io.vertx.core.MultiMap;
 import io.vertx.ext.stomp.lite.frame.Frame;
 import io.vertx.ext.web.RoutingContext;
+import io.vertx.ext.web.handler.HttpException;
 
 import java.util.Map;
 
@@ -18,7 +19,9 @@ public interface StompServerHandler {
      *
      * <p>For WebSocket transports, {@code routingContext} provides access to the HTTP upgrade request (including
      * headers, path parameters, session and user data) and returned headers are added to the HTTP upgrade response
-     * before it is accepted. A failed future rejects the handshake.</p>
+     * before it is accepted. A failed future rejects the handshake: the HTTP upgrade response carries the status code
+     * of the {@link HttpException} the future failed with, such as 401 for rejected credentials or 503 while the
+     * service that authenticates them is unavailable, and 500 for any other failure.</p>
      *
      * @param routingContext the {@link RoutingContext} of the transport handshake request
      * @return a {@link Future} containing headers to return with the transport handshake response

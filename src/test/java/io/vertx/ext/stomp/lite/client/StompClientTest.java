@@ -2,10 +2,12 @@ package io.vertx.ext.stomp.lite.client;
 
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
+import io.vertx.core.MultiMap;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpServer;
 import io.vertx.core.http.HttpServerOptions;
+import io.vertx.core.http.UpgradeRejectedException;
 import io.vertx.core.http.WebSocket;
 import io.vertx.core.http.WebSocketClient;
 import io.vertx.core.http.WebSocketConnectOptions;
@@ -15,6 +17,7 @@ import io.vertx.ext.stomp.lite.StompServerVerticleFactory;
 import io.vertx.ext.stomp.lite.frame.Frame;
 import io.vertx.ext.stomp.lite.frame.FrameParser;
 import io.vertx.ext.stomp.lite.frame.Headers;
+import io.vertx.ext.web.handler.HttpException;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -29,6 +32,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
@@ -81,6 +85,38 @@ public class StompClientTest {
         assertEquals("alice", connection.connectedFrame().getHeader("welcome"));
         assertEquals("1.2", connection.connectedFrame().getHeader(Frame.VERSION));
         assertNotNull(connection.connectedFrame().getHeader(Frame.HEARTBEAT));
+    }
+
+    @Test
+    public void connectFailsWithTheStatusOfTheHttpExceptionTheHandshakeFailsWith() throws Exception {
+        startServer(() -> Future.failedFuture(new HttpException(401, "rejected credentials")),
+                    headers -> Future.succeededFuture(Collections.emptyMap()),
+                    new StompServerOptions());
+        client = StompClient.create(vertx, new StompClientOptions());
+
+        try {
+            connect(Map.of(Frame.LOGIN, "alice"));
+            fail("connect should fail");
+        } catch (ExecutionException e) {
+            assertTrue(e.getCause() instanceof UpgradeRejectedException);
+            assertEquals(401, ((UpgradeRejectedException) e.getCause()).getStatus());
+        }
+    }
+
+    @Test
+    public void connectFailsWithA500WhenTheHandshakeFailsWithAnyOtherException() throws Exception {
+        startServer(() -> Future.failedFuture(new IllegalStateException("the authentication service is down")),
+                    headers -> Future.succeededFuture(Collections.emptyMap()),
+                    new StompServerOptions());
+        client = StompClient.create(vertx, new StompClientOptions());
+
+        try {
+            connect(Map.of(Frame.LOGIN, "alice"));
+            fail("connect should fail");
+        } catch (ExecutionException e) {
+            assertTrue(e.getCause() instanceof UpgradeRejectedException);
+            assertEquals(500, ((UpgradeRejectedException) e.getCause()).getStatus());
+        }
     }
 
     @Test
@@ -563,7 +599,13 @@ public class StompClientTest {
 
     private void startServer(Function<Map<String, String>, Future<Map<String, String>>> connectAnswer,
                              StompServerOptions stompOptions) throws Exception {
-        handler = new RecordingStompServerHandler(connectAnswer);
+        startServer(() -> Future.succeededFuture(MultiMap.caseInsensitiveMultiMap()), connectAnswer, stompOptions);
+    }
+
+    private void startServer(Supplier<Future<MultiMap>> handshakeAnswer,
+                             Function<Map<String, String>, Future<Map<String, String>>> connectAnswer,
+                             StompServerOptions stompOptions) throws Exception {
+        handler = new RecordingStompServerHandler(handshakeAnswer, connectAnswer);
         // the verticle accepts the STOMP sub-protocol on its own, so the options name none
         HttpServerOptions httpOptions = new HttpServerOptions().setPort(port);
         vertx.deployVerticle(StompServerVerticleFactory.create(httpOptions,

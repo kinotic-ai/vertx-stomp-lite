@@ -6,6 +6,8 @@ The method of extension is different than vertx-stomp.
 
 `StompServerHandler` participates in the WebSocket HTTP handshake before the socket is accepted. Implementations can inspect the handshake headers, return HTTP response headers such as `Set-Cookie`, receive the `StompServerConnection` once it exists, and then handle the STOMP `CONNECT` frame.
 
+A handshake that fails answers the upgrade request with the status code of the vertx-web `HttpException` the future failed with, so an implementation answers rejected credentials with a 401 and an authentication service it cannot reach with a 503, and a client can tell the two apart. Any other failure answers with a 500.
+
 ```mermaid
 sequenceDiagram
     participant browserClient as BrowserClient
@@ -14,8 +16,13 @@ sequenceDiagram
 
     browserClient->>wsHandler: WebSocket HTTP upgrade with headers and cookies
     wsHandler->>stompHandler: handshake(websocketHeaders)
-    stompHandler-->>wsHandler: handshake response headers
-    wsHandler->>browserClient: HTTP 101 with Set-Cookie if provided
+    alt handshake succeeds
+        stompHandler-->>wsHandler: handshake response headers
+        wsHandler->>browserClient: HTTP 101 with Set-Cookie if provided
+    else handshake fails
+        stompHandler-->>wsHandler: failed future
+        wsHandler->>browserClient: HTTP status of the HttpException, 500 for any other failure
+    end
     wsHandler->>stompHandler: connectionCreated(connection)
     browserClient->>wsHandler: STOMP CONNECT metadata
     wsHandler->>stompHandler: connect(connectHeaders)
