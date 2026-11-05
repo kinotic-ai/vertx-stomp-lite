@@ -505,6 +505,62 @@ public class StompClientTest {
         assertTrue(connection.isConnected());
     }
 
+    @Test
+    public void clientHeartbeatIsABareEndOfLineOnTheWire() throws Exception {
+        // a server that records every WebSocket frame the client writes and wants a heartbeat every 200 ms
+        LinkedBlockingQueue<Buffer> written = new LinkedBlockingQueue<>();
+        HttpServerOptions httpOptions = new HttpServerOptions().setPort(port)
+                                                               .setWebSocketSubProtocols(List.of(Frame.WEBSOCKET_SUB_PROTOCOL));
+        vertx.createHttpServer(httpOptions)
+             .webSocketHandler(socket -> {
+                 FrameParser parser = new FrameParser();
+                 parser.handler(frame -> {
+                     if (frame.getCommand() == Frame.Command.CONNECT) {
+                         socket.writeBinaryMessage(new Frame(Frame.Command.CONNECTED,
+                                                             Headers.create(Frame.VERSION, "1.2", Frame.HEARTBEAT, "0,200"),
+                                                             null).toBuffer());
+                     }
+                 });
+                 socket.handler(buffer -> {
+                     written.add(buffer.copy());
+                     parser.handle(buffer);
+                 });
+             })
+             .listen().await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        client = StompClient.create(vertx, new StompClientOptions().setHeartbeat(new JsonObject().put("x", 200).put("y", 0)));
+        connect(Collections.emptyMap());
+
+        // the CONNECT frame first, then the heartbeat STOMP 1.2 defines: a single end-of-line
+        Buffer first = written.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        assertEquals("CONNECT", first.getString(0, "CONNECT".length()));
+        Buffer heartbeat = written.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        assertEquals(FrameParser.EOL, heartbeat.toString());
+    }
+
+    @Test
+    public void serverHeartbeatIsABareEndOfLineOnTheWire() throws Exception {
+        // the server offers a heartbeat every 200 ms and a raw client asking for one records every frame it receives
+        startServer(headers -> Future.succeededFuture(Collections.emptyMap()),
+                    new StompServerOptions().setHeartbeat(new JsonObject().put("x", 200).put("y", 0)));
+        LinkedBlockingQueue<Buffer> received = new LinkedBlockingQueue<>();
+        WebSocket socket = vertx.createWebSocketClient()
+                                .connect(new WebSocketConnectOptions().setHost("localhost")
+                                                                      .setPort(port)
+                                                                      .setURI(WEBSOCKET_PATH)
+                                                                      .addSubProtocol(Frame.WEBSOCKET_SUB_PROTOCOL))
+                                .await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        socket.handler(buffer -> received.add(buffer.copy()));
+        socket.writeBinaryMessage(new Frame(Frame.Command.CONNECT,
+                                            Headers.create(Frame.ACCEPT_VERSION, "1.2", Frame.HOST, "localhost", Frame.HEARTBEAT, "0,200"),
+                                            null).toBuffer());
+
+        // the CONNECTED frame first, then the heartbeat STOMP 1.2 defines: a single end-of-line
+        Buffer first = received.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        assertEquals("CONNECTED", first.getString(0, "CONNECTED".length()));
+        Buffer heartbeat = received.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        assertEquals(FrameParser.EOL, heartbeat.toString());
+    }
+
     private void startServer(Function<Map<String, String>, Future<Map<String, String>>> connectAnswer,
                              StompServerOptions stompOptions) throws Exception {
         handler = new RecordingStompServerHandler(connectAnswer);
