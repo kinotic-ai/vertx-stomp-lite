@@ -16,14 +16,34 @@ import static org.junit.Assert.assertTrue;
 public class FrameParserTest {
 
     private static final int MAX_HEADER_LENGTH = 16;
+    private static final int MAX_HEADERS = 3;
     private static final int MAX_BODY_LENGTH = 32;
 
     private final List<Frame> frames = new ArrayList<>();
     private final List<FrameException> errors = new ArrayList<>();
-    private final FrameParser parser = new FrameParser(new StompServerOptions().setMaxHeaderLength(MAX_HEADER_LENGTH)
-                                                                               .setMaxBodyLength(MAX_BODY_LENGTH))
-            .handler(frames::add)
-            .errorHandler(errors::add);
+    private final StompServerOptions options = new StompServerOptions().setMaxHeaderLength(MAX_HEADER_LENGTH)
+                                                                       .setMaxHeaders(MAX_HEADERS)
+                                                                       .setMaxBodyLength(MAX_BODY_LENGTH);
+    private final FrameParser parser = new FrameParser(options).handler(frames::add)
+                                                               .errorHandler(errors::add);
+
+    @Test
+    public void largestFrameTheLimitsAllowFitsMaxFrameLength() {
+        // every header at the limit in three-byte chars, the body one byte under its limit
+        StringBuilder frame = new StringBuilder("SEND\n");
+        for (int i = 0; i < MAX_HEADERS; i++) {
+            frame.append("€".repeat(MAX_HEADER_LENGTH - 1)).append(i).append(':').append("€".repeat(MAX_HEADER_LENGTH)).append("\r\n");
+        }
+        frame.append('\n').append("b".repeat(MAX_BODY_LENGTH - 1)).append('\0');
+        Buffer bytes = Buffer.buffer(frame.toString());
+
+        parser.handle(bytes);
+
+        assertTrue(bytes.length() + " > " + FrameParser.maxFrameLength(options), bytes.length() <= FrameParser.maxFrameLength(options));
+        assertTrue(errors.toString(), errors.isEmpty());
+        assertEquals(1, frames.size());
+        assertEquals(MAX_HEADERS, frames.get(0).getHeaders().size());
+    }
 
     @Test
     public void headerLineOfTheLongestAllowedNameAndValueParses() {

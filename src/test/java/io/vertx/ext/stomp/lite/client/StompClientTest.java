@@ -385,7 +385,7 @@ public class StompClientTest {
     @Test
     public void frameOverTheSizeLimitEndsTheConnection() throws Exception {
         startServer(headers -> Future.succeededFuture(Collections.emptyMap()), new StompServerOptions());
-        client = StompClient.create(vertx, new StompClientOptions().setMaxFrameSize(1024));
+        client = StompClient.create(vertx, new StompClientOptions().setMaxBodyLength(1024));
         StompClientConnection connection = connect(Collections.emptyMap());
         CompletableFuture<Frame> received = new CompletableFuture<>();
         CompletableFuture<Throwable> closeCause = new CompletableFuture<>();
@@ -473,6 +473,30 @@ public class StompClientTest {
 
         closed.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
         assertTrue(handler.sendFrames().isEmpty());
+    }
+
+    @Test
+    public void frameWrittenWholeIsAcceptedUpToTheBodyLimit() throws Exception {
+        // a scripted server answers SUBSCRIBE with a MESSAGE whose body is just under the limit, written in one
+        // WebSocket frame that the headers push past the body limit
+        Buffer body = Buffer.buffer(new byte[1023]);
+        startScriptedServer(frame -> switch (frame.getCommand()) {
+            case CONNECT -> new Frame(Frame.Command.CONNECTED, Headers.create(Frame.VERSION, "1.2"), null);
+            case SUBSCRIBE -> new Frame(Frame.Command.MESSAGE,
+                                        Headers.create(Frame.SUBSCRIPTION, frame.getHeader(Frame.ID),
+                                                       Frame.DESTINATION, frame.getDestination(),
+                                                       Frame.MESSAGE_ID, "m-1",
+                                                       Frame.CONTENT_LENGTH, Integer.toString(body.length())),
+                                        body);
+            default -> null;
+        });
+        client = StompClient.create(vertx, new StompClientOptions().setMaxBodyLength(1024));
+        StompClientConnection connection = connect(Collections.emptyMap());
+        CompletableFuture<Frame> received = new CompletableFuture<>();
+        connection.subscribe("sub-1", "/queue/big", Collections.emptyMap(), received::complete).await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+        assertEquals(body.length(), received.get(TIMEOUT_SECONDS, TimeUnit.SECONDS).getBody().length());
+        assertTrue(connection.isConnected());
     }
 
     private void startServer(Function<Map<String, String>, Future<Map<String, String>>> connectAnswer,

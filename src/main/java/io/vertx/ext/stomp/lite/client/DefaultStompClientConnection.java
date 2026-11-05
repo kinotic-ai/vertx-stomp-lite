@@ -62,13 +62,13 @@ class DefaultStompClientConnection implements StompClientConnection {
     private long incomingHeartbeatTimer = -1;
     private long lastReadNanos;
 
-    DefaultStompClientConnection(ContextInternal context, WebSocket webSocket, StompClientOptions options) {
+    DefaultStompClientConnection(ContextInternal context, WebSocket webSocket, StompClientOptions options,
+                                 StompServerOptions parserOptions) {
         this.context = context;
         this.closedPromise = context.promise();
         this.webSocket = webSocket;
         this.options = options;
-        // the parser enforces the body limit; the header limits stay at the server defaults
-        this.parser = new FrameParser(new StompServerOptions().setMaxBodyLength(options.getMaxFrameSize()));
+        this.parser = new FrameParser(parserOptions);
         this.parser.handler(this::handleFrame)
                    .errorHandler(this::terminate);
     }
