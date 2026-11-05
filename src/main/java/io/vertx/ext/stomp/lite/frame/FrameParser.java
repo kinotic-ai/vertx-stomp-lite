@@ -25,7 +25,8 @@ import java.util.HashMap;
 import java.util.Objects;
 
 /**
- * A STOMP frame parser compliant with the specification (including header decoding).
+ * A STOMP frame parser compliant with the specification (including header decoding). Once it has reported a frame
+ * error it parses nothing more, since the connection it parses for ends on that error.
  *
  * @author <a href="http://escoffier.me">Clement Escoffier</a>
  */
@@ -47,7 +48,8 @@ public class FrameParser implements Handler<Buffer> {
   private Frame.Command command;
   private HashMap<String, String> headers = new HashMap<>();
   private Handler<Frame> handler;
-  private int bodyLength = 0;
+  private boolean declaredEmptyBody;
+  private boolean failed;
 
   private Handler<FrameException> errorHandler;
 
@@ -63,6 +65,10 @@ public class FrameParser implements Handler<Buffer> {
 
   public FrameParser(StompServerOptions properties) {
     this.properties = properties;
+    // RecordParser buffers a record until its delimiter arrives, so the record size bounds what an unterminated
+    // line or body can accumulate; an oversized record is reported like any other frame error
+    frameParser.exceptionHandler(e -> reportOrThrow(current == State.BODY ? "Body size exceeded" : "Header length exceeded"))
+               .maxRecordSize(maxHeaderLineBytes(properties));
   }
 
   public FrameParser() {
@@ -81,6 +87,9 @@ public class FrameParser implements Handler<Buffer> {
   }
 
   private void handleLine(Buffer buffer) {
+    if (failed) {
+      return;
+    }
     switch (current) {
       case COMMAND:
         if (isEmpty(buffer)) {
@@ -107,10 +116,27 @@ public class FrameParser implements Handler<Buffer> {
       case HEADERS:
         if (isEmpty(buffer)) {
           // End of headers.
-          current = State.BODY;
           String length = headers.get(Frame.CONTENT_LENGTH);
-          if (length != null) {
-            int contentLength = Integer.parseInt(length);
+          int contentLength;
+          try {
+            contentLength = length != null ? Integer.parseInt(length) : 0;
+          } catch (NumberFormatException e) {
+            contentLength = -1;
+          }
+          if (contentLength < 0) {
+            reportOrThrow("Invalid content-length: '" + length + "'");
+            return;
+          }
+          if (hasExceededBodySize(contentLength)) {
+            reportOrThrow("Body size exceeded");
+            return;
+          }
+          declaredEmptyBody = length != null && contentLength == 0;
+          current = State.BODY;
+          frameParser.maxRecordSize(properties.getMaxBodyLength());
+          // RecordParser rejects a fixed size of 0, so an empty body declared with content-length is read up to
+          // the NULL terminator like a body with no declared length and checked for emptiness once it ends
+          if (contentLength > 0) {
             frameParser.fixedSizeMode(contentLength);
           } else {
             frameParser.delimitedMode(NULL);
@@ -130,7 +156,7 @@ public class FrameParser implements Handler<Buffer> {
           }
 
           String header = line.substring(0, index);
-          String value = line.substring(index + 1);
+          String value = strip(line.substring(index + 1));
 
           if (hasExceededNumberOfHeaders()) {
             reportOrThrow("Number of headers exceeded");
@@ -143,17 +169,17 @@ public class FrameParser implements Handler<Buffer> {
           }
 
           // By spec (repeated headers) - Put the header only if not already set.
-          headers.putIfAbsent(header, decode(strip(value)));
+          headers.putIfAbsent(header, decode(value));
           break;
         }
       case BODY:
-        if (bodyLength == 0) {
-          // Must accumulate and check before creating the frame
-          bodyLength = buffer.length();
-          if (hasExceededBodySize()) {
-            reportOrThrow("Body size exceeded");
-            return;
-          }
+        if (hasExceededBodySize(buffer.length())) {
+          reportOrThrow("Body size exceeded");
+          return;
+        }
+        if (declaredEmptyBody && buffer.length() > 0) {
+          reportOrThrow("Body does not match content-length: 0");
+          return;
         }
 
         try {
@@ -168,10 +194,17 @@ public class FrameParser implements Handler<Buffer> {
 
   private void reset() {
     command = null;
-    bodyLength = 0;
+    declaredEmptyBody = false;
     headers = new HashMap<>();
     current = State.COMMAND;
     frameParser.delimitedMode(EOL);
+    frameParser.maxRecordSize(maxHeaderLineBytes(properties));
+  }
+
+  // a header line is a name and a value of at most maxHeaderLength chars each, a colon and an optional carriage
+  // return; the length checks count UTF-16 chars and a char is at most three UTF-8 bytes
+  private static int maxHeaderLineBytes(StompServerOptions options) {
+    return 6 * options.getMaxHeaderLength() + 2;
   }
 
   private boolean hasExceededHeaderLength(String header, String value) {
@@ -203,23 +236,20 @@ public class FrameParser implements Handler<Buffer> {
   }
 
   /**
-   * Something has happened, so handle it.
+   * Parses the bytes, handing each complete frame to the handler and a frame error to the error handler. Bytes
+   * arriving after a frame error are dropped.
    *
-   * @param event the event to handle
+   * @param event the bytes to parse
    */
   @Override
   public synchronized void handle(Buffer event) {
-    if (current == State.BODY) {
-      bodyLength += event.length();
-      if (hasExceededBodySize()) {
-        reportOrThrow("Body size exceeded");
-        return;
-      }
+    // the record parser keeps the bytes of a record it refused, so feeding it on would report the error again
+    if (!failed) {
+      frameParser.handle(event);
     }
-    frameParser.handle(event);
   }
 
-  private boolean hasExceededBodySize() {
+  private boolean hasExceededBodySize(int bodyLength) {
     return bodyLength >= properties.getMaxBodyLength();
   }
 
@@ -231,6 +261,7 @@ public class FrameParser implements Handler<Buffer> {
    */
   private void reportOrThrow(String error) {
     FrameException exception = new FrameException(error);
+    failed = true;
     reset();
     if (errorHandler != null) {
       errorHandler.handle(exception);

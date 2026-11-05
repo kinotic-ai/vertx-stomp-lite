@@ -39,6 +39,11 @@ public class Frame {
 
   public static final String UTF_8 = "utf-8";
 
+  /**
+   * The WebSocket sub-protocol STOMP 1.2 frames travel under: the client requests it and the server accepts it.
+   */
+  public static final String WEBSOCKET_SUB_PROTOCOL = "v12.stomp";
+
   // General headers
   public static final String CONTENT_LENGTH = "content-length";
   public static final String CONTENT_TYPE = "content-type";
@@ -136,12 +141,21 @@ public class Frame {
      * @return the heartbeat configuration
      */
     public static Heartbeat parse(String header) {
+      Heartbeat ret;
       if (header == null) {
-        return new Heartbeat(0, 0);
+        ret = new Heartbeat(0, 0);
       } else {
         String[] token = header.split(FrameParser.COMMA);
-        return new Heartbeat(Integer.parseInt(token[0]), Integer.parseInt(token[1]));
+        if (token.length != 2) {
+          throw new IllegalArgumentException("Invalid heart-beat header: '" + header + "'");
+        }
+        try {
+          ret = new Heartbeat(Integer.parseInt(token[0].trim()), Integer.parseInt(token[1].trim()));
+        } catch (NumberFormatException e) {
+          throw new IllegalArgumentException("Invalid heart-beat header: '" + header + "'", e);
+        }
       }
+      return ret;
     }
 
     /**
@@ -228,7 +242,7 @@ public class Frame {
   public Frame(Frame other) {
     this();
     this.command = other.command;
-    this.headers.putAll(headers);
+    this.headers.putAll(other.headers);
     if (other.body != null) {
       this.body = other.body.copy();
     }

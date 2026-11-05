@@ -58,8 +58,8 @@ public class StompServerOptions {
   }
 
   /**
-   * Gets the max length of the frame body accepted by the server. If a frame exceeds this size, the frame is
-   * rejected and an error is sent to the client.
+   * Gets the max length of the frame body accepted by the server. If a frame's body reaches this size, or its
+   * {@code content-length} declares as much, the frame is rejected and an error is sent to the client.
    *
    * @return the max body length in bytes
    */
@@ -68,7 +68,7 @@ public class StompServerOptions {
   }
 
   /**
-   * Sets the max body length accepted by the server. 100 Mb by default.
+   * Sets the max body length accepted by the server. 10 MB by default.
    *
    * @param maxBodyLength the length in bytes.
    * @return the current {@link StompServerOptions}
@@ -79,8 +79,9 @@ public class StompServerOptions {
   }
 
   /**
-   * Gets the max length of header's value. If a frame has an header with a value exceeding this length, the frame is
-   * rejected and an error is sent to the client. 10240 by default.
+   * Gets the max length of a header's name and of its value. If a frame has a header exceeding this length, the frame
+   * is rejected and an error is sent to the client. A header line that stays unterminated past the bytes this length
+   * allows is rejected the same way, so an unfinished frame cannot buffer without bound. 10240 by default.
    *
    * @return the max header length
    */

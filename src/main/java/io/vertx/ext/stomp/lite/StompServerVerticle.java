@@ -22,10 +22,13 @@ import io.vertx.core.Future;
 import io.vertx.core.VerticleBase;
 import io.vertx.core.http.HttpServer;
 import io.vertx.core.http.HttpServerOptions;
+import io.vertx.ext.stomp.lite.frame.Frame;
 import io.vertx.ext.stomp.lite.handler.StompServerWebSocketHandler;
 import io.vertx.ext.web.Router;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.List;
 
 /**
  * Created by Navid Mitchell on 2019-01-09.
@@ -75,7 +78,14 @@ public class StompServerVerticle extends VerticleBase {
                            }
                        });
 
-        httpServer = vertx.createHttpServer(httpOptions)
+        // the client requests the STOMP sub-protocol, and a handshake that does not echo it fails on the client
+        HttpServerOptions effectiveHttpOptions = new HttpServerOptions(httpOptions);
+        List<String> subProtocols = effectiveHttpOptions.getWebSocketSubProtocols();
+        if (subProtocols == null || !subProtocols.contains(Frame.WEBSOCKET_SUB_PROTOCOL)) {
+            effectiveHttpOptions.addWebSocketSubProtocol(Frame.WEBSOCKET_SUB_PROTOCOL);
+        }
+
+        httpServer = vertx.createHttpServer(effectiveHttpOptions)
                           .requestHandler(effectiveRouter)
                           .exceptionHandler(event -> log.error(
                                   "Stomp server Exception before completing Client Connection",

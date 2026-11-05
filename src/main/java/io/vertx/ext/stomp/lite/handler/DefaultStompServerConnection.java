@@ -38,8 +38,8 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
 
     private boolean connected = false;
     private boolean closed = false;
+    private boolean closing = false;
     private volatile long lastClientActivity;
-    private volatile long lastServerActivity;
     private long serverHeartbeat = -1;
     private long clientHeartbeat = -1;
 
@@ -96,7 +96,6 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
 
     @Override
     public Future<Void> write(Buffer buffer) {
-        onServerActivity();
         return serverWebSocket.writeBinaryMessage(buffer);
     }
 
@@ -117,11 +116,24 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
 
     @Override
     public Future<Void> sendErrorAndDisconnect(Throwable throwable) {
+        return sendErrorAndDisconnect(throwable, null);
+    }
+
+    @Override
+    public Future<Void> sendErrorAndDisconnect(Throwable throwable, Frame causingFrame) {
         if(log.isDebugEnabled()){
             log.debug("Sending Error and disconnecting client. Host: {}", serverWebSocket.remoteAddress().host(), throwable);
         }
+        Frame error = Frames.createErrorFrame(throwable, options.isDebugEnabled());
+        String receipt = causingFrame != null ? causingFrame.getReceipt() : null;
+        if (receipt != null) {
+            error.addHeader(Frame.RECEIPT_ID, receipt);
+        }
+        // STOMP has the server process nothing after an ERROR frame, so a frame already buffered behind the one
+        // it answers is dropped rather than handled before the close
+        closing = true;
         Promise<Void> ret = Promise.promise();
-        sendError(throwable)
+        write(error)
                 .onComplete(event -> {
                     // now that data was sent close connection and finish promise
                     close();
@@ -135,21 +147,32 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
     }
 
     /**
-     * Used to signal that the processing of a frame resulted in an exception
+     * Used to signal that an exception occurred before a client frame could be processed: the connection is closed
+     * without an ERROR frame
      * @param t the exception that was caused
-     * @param sendErrorFrame true if an ERROR frame should be sent to the client prior to closing it
      */
-    public void clientCausedException(Throwable t, boolean sendErrorFrame){
+    public void clientCausedException(Throwable t){
+        notifyException(t);
+        close();
+    }
+
+    /**
+     * Used to signal that the processing of a client frame resulted in an exception: the client receives an ERROR
+     * frame naming that frame's receipt, then the connection is closed
+     * @param t the exception that was caused
+     * @param causingFrame the frame whose processing failed
+     */
+    public void clientCausedException(Throwable t, Frame causingFrame){
+        notifyException(t);
+        logIfFailed(sendErrorAndDisconnect(t, causingFrame),
+                    "Problem sending ERROR frame to client");
+    }
+
+    private void notifyException(Throwable t) {
         try {
             stompServerHandler.exception(t);
         } catch (Exception e) {
             log.error("StompServerHandler.exception handler threw an exception.. You should fix your handler not to throw exceptions.", e);
-        }
-        if(sendErrorFrame) {
-            logIfFailed(sendErrorAndDisconnect(t),
-                        "Problem sending ERROR frame to client");
-        }else{
-            close();
         }
     }
 
@@ -217,14 +240,17 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
 
     @Override
     public void handle(Frame frame) {
-        if(!closed) {
+        // nothing is processed once the connection is closing or closed: STOMP has the server stop after the ERROR
+        // frame it answered with, and a frame behind a DISCONNECT or a close is dropped the same way
+        if (!closed && !closing) {
             try {
                 switch (frame.getCommand()) {
                     case CONNECT:
                         if(connected){
-                            clientCausedException(new IllegalStateException("CONNECT has already been called."), true);
+                            clientCausedException(new IllegalStateException("CONNECT has already been called."), frame);
+                        } else {
+                            onConnect(frame);
                         }
-                        onConnect(frame);
                         break;
                     case SEND:
                         ensureConnected();
@@ -319,10 +345,8 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
             } catch (Exception e) {
                 // Sync throws from the user StompServerHandler (e.g. connect()) must produce
                 // a STOMP ERROR frame so the client sees a diagnostic instead of a bare WS close.
-                clientCausedException(e, true);
+                clientCausedException(e, frame);
             }
-        } else {
-            log.error("THIS SHOULD NEVER HAPPEN!! Frame Handler called after close.");
         }
     }
 
@@ -351,6 +375,8 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
             // Spec says: if the server and the client do not share any common protocol versions, then the server MUST respond with an error.
             throw new IllegalStateException("Client protocol requirement does not mach versions supported by the server.");
         }
+        // parsed before the frame is answered, so an invalid header is answered with an ERROR frame
+        Frame.Heartbeat clientHeartbeat = Frame.Heartbeat.parse(frame.getHeader(Frame.HEARTBEAT));
 
         // Now process the client CONNECT frame
         stompServerHandler
@@ -368,7 +394,6 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
                                 .onComplete(ar -> {
                                     if (ar.succeeded()) {
                                         // now that we are connected Compute heartbeat, and register serverHeartbeat and clientHeartbeat
-                                        Frame.Heartbeat clientHeartbeat = Frame.Heartbeat.parse(frame.getHeader(Frame.HEARTBEAT));
                                         Frame.Heartbeat serverHeartbeat = Frame.Heartbeat.create(options.getHeartbeat());
                                         long clientHeartbeatPeriod = Frame.Heartbeat.computeClientHeartbeatPeriod(clientHeartbeat,
                                                                                                                   serverHeartbeat);
@@ -428,24 +453,15 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
         lastClientActivity = System.nanoTime();
     }
 
-    private void onServerActivity() {
-        lastServerActivity = System.nanoTime();
-    }
-
     private void ping() {
-        // we send directly so we do not increment serverActivity since we do not want pings to count towards that metric
-        serverWebSocket.writeBinaryMessage(Buffer.buffer(FrameParser.EOL));
+        serverWebSocket.writeBinaryMessage(Frames.ping().toBuffer());
     }
 
     private void configureHeartbeat(long clientHeartbeatPeriod, long serverHeartbeatPeriod) {
         if (serverHeartbeatPeriod > 0) {
-            serverHeartbeat = vertx.setPeriodic(serverHeartbeatPeriod, event -> {
-                long delta = System.nanoTime() - lastServerActivity;
-                final long deltaInMs = TimeUnit.MILLISECONDS.convert(delta, TimeUnit.NANOSECONDS);
-                if (deltaInMs >= serverHeartbeatPeriod) {
-                    ping();
-                }
-            });
+            // sent every period whatever else was written, so the gap the client measures stays one period and
+            // never nears its cutoff of two
+            serverHeartbeat = vertx.setPeriodic(serverHeartbeatPeriod, event -> ping());
         }
         if (clientHeartbeatPeriod > 0) {
             clientHeartbeat = vertx.setPeriodic(clientHeartbeatPeriod, l -> {
