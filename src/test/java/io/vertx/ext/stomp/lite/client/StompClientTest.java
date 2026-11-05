@@ -89,7 +89,8 @@ public class StompClientTest {
 
     @Test
     public void connectFailsWithTheStatusOfTheHttpExceptionTheHandshakeFailsWith() throws Exception {
-        startServer(() -> Future.failedFuture(new HttpException(401, "rejected credentials")),
+        // a status other than 401, so a server answering every failure with a 401 would fail the test
+        startServer(() -> Future.failedFuture(new HttpException(503, "the authentication service is unavailable")),
                     headers -> Future.succeededFuture(Collections.emptyMap()),
                     new StompServerOptions());
         client = StompClient.create(vertx, new StompClientOptions());
@@ -99,13 +100,13 @@ public class StompClientTest {
             fail("connect should fail");
         } catch (ExecutionException e) {
             assertTrue(e.getCause() instanceof UpgradeRejectedException);
-            assertEquals(401, ((UpgradeRejectedException) e.getCause()).getStatus());
+            assertEquals(503, ((UpgradeRejectedException) e.getCause()).getStatus());
         }
     }
 
     @Test
     public void connectFailsWithA500WhenTheHandshakeFailsWithAnyOtherException() throws Exception {
-        startServer(() -> Future.failedFuture(new IllegalStateException("the authentication service is down")),
+        startServer(() -> Future.failedFuture(new IllegalStateException("a failure the handler did not classify")),
                     headers -> Future.succeededFuture(Collections.emptyMap()),
                     new StompServerOptions());
         client = StompClient.create(vertx, new StompClientOptions());
