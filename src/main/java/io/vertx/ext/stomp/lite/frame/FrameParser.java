@@ -25,7 +25,8 @@ import java.util.HashMap;
 import java.util.Objects;
 
 /**
- * A STOMP frame parser compliant with the specification (including header decoding).
+ * A STOMP frame parser compliant with the specification (including header decoding). Once it has reported a frame
+ * error it parses nothing more, since the connection it parses for ends on that error.
  *
  * @author <a href="http://escoffier.me">Clement Escoffier</a>
  */
@@ -48,6 +49,7 @@ public class FrameParser implements Handler<Buffer> {
   private HashMap<String, String> headers = new HashMap<>();
   private Handler<Frame> handler;
   private boolean declaredEmptyBody;
+  private boolean failed;
 
   private Handler<FrameException> errorHandler;
 
@@ -85,6 +87,9 @@ public class FrameParser implements Handler<Buffer> {
   }
 
   private void handleLine(Buffer buffer) {
+    if (failed) {
+      return;
+    }
     switch (current) {
       case COMMAND:
         if (isEmpty(buffer)) {
@@ -231,13 +236,17 @@ public class FrameParser implements Handler<Buffer> {
   }
 
   /**
-   * Something has happened, so handle it.
+   * Parses the bytes, handing each complete frame to the handler and a frame error to the error handler. Bytes
+   * arriving after a frame error are dropped.
    *
-   * @param event the event to handle
+   * @param event the bytes to parse
    */
   @Override
   public synchronized void handle(Buffer event) {
-    frameParser.handle(event);
+    // the record parser keeps the bytes of a record it refused, so feeding it on would report the error again
+    if (!failed) {
+      frameParser.handle(event);
+    }
   }
 
   private boolean hasExceededBodySize(int bodyLength) {
@@ -252,6 +261,7 @@ public class FrameParser implements Handler<Buffer> {
    */
   private void reportOrThrow(String error) {
     FrameException exception = new FrameException(error);
+    failed = true;
     reset();
     if (errorHandler != null) {
       errorHandler.handle(exception);

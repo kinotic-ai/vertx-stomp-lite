@@ -314,12 +314,17 @@ public class StompClientTest {
                 : null);
         client = StompClient.create(vertx, new StompClientOptions().setConnectTimeout(300));
         StompClientConnection connection = connect(Collections.emptyMap());
+        CompletableFuture<Throwable> closeCause = new CompletableFuture<>();
+        connection.closeHandler(closeCause::complete);
 
         long started = System.nanoTime();
         connection.disconnect().await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 5000);
         assertFalse(connection.isConnected());
+        // the unanswered DISCONNECT is the cause of the close, where an answered one closes with none
+        Throwable cause = closeCause.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        assertTrue(String.valueOf(cause), cause.getMessage().contains("DISCONNECT"));
     }
 
     @Test

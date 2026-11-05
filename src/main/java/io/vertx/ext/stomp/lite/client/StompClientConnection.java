@@ -59,7 +59,8 @@ public interface StompClientConnection {
 
     /**
      * Sends a DISCONNECT frame with a receipt and closes the connection once the server answers with the RECEIPT,
-     * closes the connection itself, or has done neither within {@link StompClientOptions#getConnectTimeout()}.
+     * closes the connection itself, or has done neither within {@link StompClientOptions#getConnectTimeout()}, in
+     * which case the close handler receives the timeout as the cause.
      *
      * @return a future completed when the connection is closed
      */
@@ -89,9 +90,10 @@ public interface StompClientConnection {
     /**
      * Sets the handler invoked once when the connection closes, however it closes. The cause is what ended the
      * connection: the {@link StompErrorException} of an ERROR frame, the heartbeat failure of a silent server, a
-     * frame the client could not parse or accept, or a transport failure. It is {@code null} when the connection
-     * closed without any such failure, after {@link #disconnect()}, {@link #close()} or a close the server
-     * initiated without an ERROR frame. A handler set after the connection closed is invoked at once.
+     * frame the client could not parse or accept, a transport failure, or the timeout of a {@link #disconnect()}
+     * the server never answered. It is {@code null} when the connection closed without any such failure, after a
+     * {@link #disconnect()} the server answered or closed on, {@link #close()} or a close the server initiated
+     * without an ERROR frame. A handler set after the connection closed is invoked at once.
      *
      * @param handler the handler
      * @return this for fluent usage

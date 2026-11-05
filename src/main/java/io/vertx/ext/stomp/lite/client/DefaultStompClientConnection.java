@@ -25,6 +25,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 
 /**
@@ -161,15 +162,21 @@ class DefaultStompClientConnection implements StompClientConnection {
         return onContext(() -> {
             if (!closed) {
                 String receipt = DISCONNECT_RECEIPT_PREFIX + UUID.randomUUID();
-                // the server closes the connection after the RECEIPT; one that closes without a RECEIPT, or answers
-                // nothing within the connect timeout, has disconnected the client all the same, so every outcome
-                // ends in the close
+                // the server closes the connection after the RECEIPT, and one that closes without a RECEIPT has
+                // ended the connection already; one that answers nothing within the connect timeout is closed here
+                // with the timeout as the cause
                 writeAwaitingReceipt(new Frame(Frame.Command.DISCONNECT, Headers.create(Frame.RECEIPT, receipt), null))
                         .timeout(options.getConnectTimeout(), TimeUnit.MILLISECONDS)
-                        .onComplete(ar -> close());
+                        .onComplete(ar -> terminate(ar.succeeded() ? null : disconnectFailure(ar.cause())));
             }
             return closedPromise.future();
         });
+    }
+
+    private Throwable disconnectFailure(Throwable cause) {
+        return cause instanceof TimeoutException
+                ? new VertxException("The server did not answer the DISCONNECT frame within " + options.getConnectTimeout() + " ms", true)
+                : cause;
     }
 
     @Override

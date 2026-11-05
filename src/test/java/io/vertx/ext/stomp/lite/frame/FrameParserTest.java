@@ -45,6 +45,8 @@ public class FrameParserTest {
         assertTrue(errors.toString(), errors.isEmpty());
 
         parser.handle(Buffer.buffer("x"));
+        // the bytes still arriving behind the error, a complete frame among them, are dropped
+        parser.handle(Buffer.buffer("x".repeat(100) + "\nSEND\ndestination:/q\n\n\0"));
 
         assertEquals(1, errors.size());
         assertEquals("Header length exceeded", errors.get(0).getMessage());
