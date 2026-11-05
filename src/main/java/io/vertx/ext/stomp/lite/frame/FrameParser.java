@@ -63,6 +63,10 @@ public class FrameParser implements Handler<Buffer> {
 
   public FrameParser(StompServerOptions properties) {
     this.properties = properties;
+    // RecordParser buffers a record until its delimiter arrives, so the record size bounds what an unterminated
+    // line or body can accumulate; an oversized record is reported like any other frame error
+    frameParser.exceptionHandler(e -> reportOrThrow(current == State.BODY ? "Body size exceeded" : "Header length exceeded"))
+               .maxRecordSize(maxHeaderLineBytes());
   }
 
   public FrameParser() {
@@ -119,6 +123,7 @@ public class FrameParser implements Handler<Buffer> {
             return;
           }
           current = State.BODY;
+          frameParser.maxRecordSize(properties.getMaxBodyLength());
           // RecordParser rejects a fixed size of 0, so an empty body declared with content-length is read up to
           // the NULL terminator like a body with no declared length
           if (contentLength > 0) {
@@ -141,7 +146,7 @@ public class FrameParser implements Handler<Buffer> {
           }
 
           String header = line.substring(0, index);
-          String value = line.substring(index + 1);
+          String value = strip(line.substring(index + 1));
 
           if (hasExceededNumberOfHeaders()) {
             reportOrThrow("Number of headers exceeded");
@@ -154,7 +159,7 @@ public class FrameParser implements Handler<Buffer> {
           }
 
           // By spec (repeated headers) - Put the header only if not already set.
-          headers.putIfAbsent(header, decode(strip(value)));
+          headers.putIfAbsent(header, decode(value));
           break;
         }
       case BODY:
@@ -183,6 +188,13 @@ public class FrameParser implements Handler<Buffer> {
     headers = new HashMap<>();
     current = State.COMMAND;
     frameParser.delimitedMode(EOL);
+    frameParser.maxRecordSize(maxHeaderLineBytes());
+  }
+
+  // a header line is a name and a value of at most maxHeaderLength chars each, a colon and an optional carriage
+  // return; the length checks count UTF-16 chars and a char is at most three UTF-8 bytes
+  private int maxHeaderLineBytes() {
+    return 6 * properties.getMaxHeaderLength() + 2;
   }
 
   private boolean hasExceededHeaderLength(String header, String value) {

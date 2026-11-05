@@ -419,6 +419,62 @@ public class StompClientTest {
         assertNull(lateCloseCause.get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
     }
 
+    @Test
+    public void serverStreamingAnUnterminatedHeaderEndsTheConnection() throws Exception {
+        // a server that answers CONNECT and then writes a header line that never ends, in small messages
+        HttpServerOptions httpOptions = new HttpServerOptions().setPort(port)
+                                                               .setWebSocketSubProtocols(List.of(Frame.WEBSOCKET_SUB_PROTOCOL));
+        vertx.createHttpServer(httpOptions)
+             .webSocketHandler(socket -> {
+                 FrameParser parser = new FrameParser();
+                 parser.handler(frame -> {
+                     socket.writeBinaryMessage(new Frame(Frame.Command.CONNECTED, Headers.create(Frame.VERSION, "1.2"), null).toBuffer());
+                     socket.writeBinaryMessage(Buffer.buffer("MESSAGE\ndestination:"));
+                     Buffer piece = Buffer.buffer("x".repeat(1024));
+                     for (int i = 0; i < 100; i++) {
+                         socket.writeBinaryMessage(piece);
+                     }
+                 });
+                 socket.handler(parser);
+             })
+             .listen().await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        client = StompClient.create(vertx, new StompClientOptions());
+        StompClientConnection connection = connect(Collections.emptyMap());
+        CompletableFuture<Throwable> closeCause = new CompletableFuture<>();
+        connection.closeHandler(closeCause::complete);
+
+        Throwable cause = closeCause.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+        assertTrue(String.valueOf(cause), cause.getMessage().contains("Header length exceeded"));
+        assertFalse(connection.isConnected());
+    }
+
+    @Test
+    public void clientStreamingAnUnterminatedHeaderIsDisconnected() throws Exception {
+        startServer(headers -> Future.succeededFuture(Collections.emptyMap()), new StompServerOptions());
+        LinkedBlockingQueue<Frame> frames = new LinkedBlockingQueue<>();
+        CompletableFuture<Void> closed = new CompletableFuture<>();
+        WebSocket socket = openRawSocket(frames::add, closed);
+        socket.writeBinaryMessage(new Frame(Frame.Command.CONNECT,
+                                            Headers.create(Frame.ACCEPT_VERSION, "1.2", Frame.HOST, "localhost"),
+                                            null).toBuffer());
+        assertEquals(Frame.Command.CONNECTED, frames.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS).getCommand());
+        // a header value of the longest length the server allows still gets through
+        String longest = "v".repeat(StompServerOptions.DEFAULT_MAX_HEADER_LENGTH);
+        socket.writeBinaryMessage(Buffer.buffer("SEND\ndestination:/queue/orders\nnote:" + longest + "\n\n\0"));
+        assertEquals(longest, handler.sendFrames().poll(TIMEOUT_SECONDS, TimeUnit.SECONDS).getHeader("note"));
+
+        // a header line that never ends is cut off once it passes the limit instead of buffering without bound
+        socket.writeBinaryMessage(Buffer.buffer("SEND\ndestination:"));
+        Buffer piece = Buffer.buffer("x".repeat(1024));
+        for (int i = 0; i < 100; i++) {
+            socket.writeBinaryMessage(piece);
+        }
+
+        closed.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        assertTrue(handler.sendFrames().isEmpty());
+    }
+
     private void startServer(Function<Map<String, String>, Future<Map<String, String>>> connectAnswer,
                              StompServerOptions stompOptions) throws Exception {
         handler = new RecordingStompServerHandler(connectAnswer);
