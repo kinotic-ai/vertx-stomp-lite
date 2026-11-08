@@ -387,8 +387,9 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
         stompServerHandler
                 .connect(frame.getHeaders())
                 .onComplete(connectResult -> {
-                    // the connection may have been closed while the handler was authenticating
-                    if (closed) {
+                    // the connection may have been closed while the handler was authenticating, or be closing
+                    // behind an ERROR frame, after which STOMP lets the server send nothing more
+                    if (closed || closing) {
                         return;
                     }
 
@@ -401,9 +402,10 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
 
                         write(new Frame(Frame.Command.CONNECTED, headers, null))
                                 .onComplete(ar -> {
-                                    if (closed) {
-                                        // closed while the CONNECTED frame was being written: registering
-                                        // heartbeat timers now would leave them running with nothing to cancel them
+                                    if (closed || closing) {
+                                        // closed, or closing, while the CONNECTED frame was being written:
+                                        // registering heartbeat timers now would leave them running with nothing
+                                        // to cancel them
                                         return;
                                     }
                                     if (ar.succeeded()) {
