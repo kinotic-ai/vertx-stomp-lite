@@ -37,6 +37,9 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
     private final StompServerHandler stompServerHandler;
 
     private boolean connected = false;
+    // set once a CONNECT is accepted for processing, so a second CONNECT sent while the first is still being
+    // authenticated is rejected rather than racing it and registering a second set of heartbeat timers
+    private boolean connecting = false;
     private boolean closed = false;
     private boolean closing = false;
     private volatile long lastClientActivity;
@@ -152,6 +155,8 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
      * @param t the exception that was caused
      */
     public void clientCausedException(Throwable t){
+        // closing before the handler is told, so a pending CONNECT it completes from exception() sends nothing
+        closing = true;
         notifyException(t);
         close();
     }
@@ -163,6 +168,9 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
      * @param causingFrame the frame whose processing failed
      */
     public void clientCausedException(Throwable t, Frame causingFrame){
+        // closing before the handler is told, so a pending CONNECT it completes from exception() cannot answer with
+        // CONNECTED ahead of the ERROR frame
+        closing = true;
         notifyException(t);
         logIfFailed(sendErrorAndDisconnect(t, causingFrame),
                     "Problem sending ERROR frame to client");
@@ -200,6 +208,11 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
     @Override
     public void close() {
         if(!closed) {
+            // marked closed before the handler is told, so whatever it completes from closed(), such as a pending
+            // CONNECT, sees a closed connection, and a close() that this causes returns at once instead of running
+            // the handler's closed() a second time
+            closed = true;
+
             if(log.isDebugEnabled()) {
                 log.debug("Closing Stomp Connection. Host: {}", serverWebSocket.remoteAddress().host());
             }
@@ -229,7 +242,6 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
                 // Ignore it, the web socket has already been closed.
                 log.warn("Error closing serverWebSocket.", e);
             }
-            closed = true;
         }
     }
 
@@ -246,7 +258,7 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
             try {
                 switch (frame.getCommand()) {
                     case CONNECT:
-                        if(connected){
+                        if(connected || connecting){
                             clientCausedException(new IllegalStateException("CONNECT has already been called."), frame);
                         } else {
                             onConnect(frame);
@@ -378,10 +390,17 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
         // parsed before the frame is answered, so an invalid header is answered with an ERROR frame
         Frame.Heartbeat clientHeartbeat = Frame.Heartbeat.parse(frame.getHeader(Frame.HEARTBEAT));
 
+        connecting = true;
+
         // Now process the client CONNECT frame
         stompServerHandler
                 .connect(frame.getHeaders())
                 .onComplete(connectResult -> {
+                    // the connection may have been closed while the handler was authenticating, or be closing
+                    // behind an ERROR frame, after which STOMP lets the server send nothing more
+                    if (closed || closing) {
+                        return;
+                    }
 
                     if (connectResult.succeeded()) {
 
@@ -392,6 +411,12 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
 
                         write(new Frame(Frame.Command.CONNECTED, headers, null))
                                 .onComplete(ar -> {
+                                    if (closed || closing) {
+                                        // closed, or closing, while the CONNECTED frame was being written:
+                                        // registering heartbeat timers now would leave them running with nothing
+                                        // to cancel them
+                                        return;
+                                    }
                                     if (ar.succeeded()) {
                                         // now that we are connected Compute heartbeat, and register serverHeartbeat and clientHeartbeat
                                         Frame.Heartbeat serverHeartbeat = Frame.Heartbeat.create(options.getHeartbeat());
@@ -458,6 +483,8 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
     }
 
     private void configureHeartbeat(long clientHeartbeatPeriod, long serverHeartbeatPeriod) {
+        // never leave an earlier timer running unreferenced
+        cancelHeartbeat();
         if (serverHeartbeatPeriod > 0) {
             // sent every period whatever else was written, so the gap the client measures stays one period and
             // never nears its cutoff of two

@@ -19,12 +19,12 @@ package io.vertx.ext.stomp.lite.frame;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.json.JsonObject;
 
+import java.nio.charset.Charset;
+import java.nio.charset.IllegalCharsetNameException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Represents a STOMP frame. STOMP frames are structured as follows. It starts by a {@code command}, followed by a
@@ -82,7 +82,7 @@ public class Frame {
    * Regex used to extract the body encoding that may be specified in the {@code content-type} header. By default,
    * UTF-8 is used.
    */
-  private final static Pattern CHARSET_PATTERN = Pattern.compile(".+;charset=([a-zA-Z0-9\\-]+);?.*");
+  private static final String CHARSET_PARAMETER = ";charset=";
 
   /**
    * The list of command defined by the STOMP specification.
@@ -420,7 +420,8 @@ public class Frame {
   }
 
   /**
-   * Read the frame encoding. If not set defaults to utf-8.
+   * Read the frame encoding: the content-type's charset when it names one this JVM supports, utf-8 otherwise, so
+   * the result can always decode the body.
    *
    * @return the encoding
    */
@@ -429,13 +430,51 @@ public class Frame {
     if (header == null) {
       return UTF_8;
     } else {
-      final Matcher matcher = CHARSET_PATTERN.matcher(header);
-      if (matcher.matches()) {
-        return matcher.group(1);
-      } else {
-        return UTF_8;
-      }
+      String charset = charsetParameter(header);
+      return charset != null && isSupportedCharset(charset) ? charset : UTF_8;
     }
+  }
+
+  private static boolean isSupportedCharset(String charset) {
+    try {
+      return Charset.isSupported(charset);
+    } catch (IllegalCharsetNameException e) {
+      // a name not shaped like a charset name, such as one starting with a hyphen
+      return false;
+    }
+  }
+
+  /**
+   * Finds the value of the last {@code ;charset=} parameter of a content-type that names one. The header is searched
+   * from its end and the search stops at the first such parameter found, so a typical header is barely scanned and
+   * no header, however crafted, costs more than one pass over it. No regular expression is used, so nothing can
+   * backtrack, and only the returned charset is allocated.
+   *
+   * @return the charset, {@code null} if the header names none
+   */
+  static String charsetParameter(String contentType) {
+    int length = contentType.length();
+    int index = contentType.lastIndexOf(CHARSET_PARAMETER);
+    // the parameter must follow a media type, so a match at index 0 does not count
+    while (index > 0) {
+      int start = index + CHARSET_PARAMETER.length();
+      int end = start;
+      while (end < length && isCharsetChar(contentType.charAt(end))) {
+        end++;
+      }
+      if (end > start) {
+        return contentType.substring(start, end);
+      }
+      // an empty value, as in ";charset=;": fall back to an earlier parameter
+      index = contentType.lastIndexOf(CHARSET_PARAMETER, index - 1);
+    }
+    return null;
+  }
+
+  // the characters java.nio.charset.Charset allows in a charset name, so an alias such as ISO_8859-1 is read whole
+  private static boolean isCharsetChar(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+        || c == '-' || c == '+' || c == '.' || c == ':' || c == '_';
   }
 
   /**
