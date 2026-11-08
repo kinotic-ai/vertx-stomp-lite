@@ -558,6 +558,33 @@ public class StompClientTest {
     }
 
     @Test
+    public void connectCompletedByTheHandlerWhileClosingIsIgnored() throws Exception {
+        // a handler that cancels the authentication in flight when the connection closes, failing the CONNECT from
+        // inside closed()
+        CompletableFuture<Promise<Map<String, String>>> firstConnect = new CompletableFuture<>();
+        startServer(headers -> {
+            Promise<Map<String, String>> pending = Promise.promise();
+            firstConnect.complete(pending);
+            return pending.future();
+        }, new StompServerOptions());
+        LinkedBlockingQueue<Frame> frames = new LinkedBlockingQueue<>();
+        CompletableFuture<Void> closed = new CompletableFuture<>();
+        WebSocket socket = openRawSocket(frames::add, closed);
+        socket.writeBinaryMessage(new Frame(Frame.Command.CONNECT,
+                                            Headers.create(Frame.ACCEPT_VERSION, "1.2", Frame.HOST, "localhost"),
+                                            null).toBuffer());
+        Promise<Map<String, String>> pending = firstConnect.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        handler.onClosed(() -> pending.tryFail(new IllegalStateException("connection closed")));
+
+        socket.close();
+
+        handler.closedSignal().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        // the failed CONNECT neither answers with an ERROR frame nor closes the connection a second time
+        Thread.sleep(300);
+        assertEquals(1, handler.closedCalls());
+    }
+
+    @Test
     public void connectAfterConnectedIsRejected() throws Exception {
         startServer(headers -> Future.succeededFuture(Collections.emptyMap()), new StompServerOptions());
         LinkedBlockingQueue<Frame> frames = new LinkedBlockingQueue<>();

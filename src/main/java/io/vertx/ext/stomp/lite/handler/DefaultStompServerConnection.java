@@ -203,6 +203,11 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
     @Override
     public void close() {
         if(!closed) {
+            // marked closed before the handler is told, so whatever it completes from closed(), such as a pending
+            // CONNECT, sees a closed connection, and a close() that this causes returns at once instead of running
+            // the handler's closed() a second time
+            closed = true;
+
             if(log.isDebugEnabled()) {
                 log.debug("Closing Stomp Connection. Host: {}", serverWebSocket.remoteAddress().host());
             }
@@ -232,7 +237,6 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
                 // Ignore it, the web socket has already been closed.
                 log.warn("Error closing serverWebSocket.", e);
             }
-            closed = true;
         }
     }
 

@@ -11,6 +11,7 @@ import io.vertx.ext.web.RoutingContext;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -30,6 +31,8 @@ public class RecordingStompServerHandler extends AbstractStompServerHandler {
     private final LinkedBlockingQueue<Frame> unsubscribeFrames = new LinkedBlockingQueue<>();
     private final CompletableFuture<Void> disconnected = new CompletableFuture<>();
     private final CompletableFuture<Void> closed = new CompletableFuture<>();
+    private final AtomicInteger closedCalls = new AtomicInteger();
+    private volatile Runnable onClosed = () -> {};
 
     public RecordingStompServerHandler(Supplier<Future<MultiMap>> handshakeAnswer,
                                        Function<Map<String, String>, Future<Map<String, String>>> connectAnswer) {
@@ -99,6 +102,8 @@ public class RecordingStompServerHandler extends AbstractStompServerHandler {
 
     @Override
     public void closed() {
+        closedCalls.incrementAndGet();
+        onClosed.run();
         closed.complete(null);
     }
 
@@ -131,6 +136,20 @@ public class RecordingStompServerHandler extends AbstractStompServerHandler {
 
     public CompletableFuture<Void> closedSignal() {
         return closed;
+    }
+
+    /**
+     * How many times the connection has called {@link #closed()}, which it must do exactly once.
+     */
+    public int closedCalls() {
+        return closedCalls.get();
+    }
+
+    /**
+     * Runs the action inside {@link #closed()}, on the connection's context, before the closed signal completes.
+     */
+    public void onClosed(Runnable action) {
+        this.onClosed = action;
     }
 
 }
