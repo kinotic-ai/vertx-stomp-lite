@@ -1,8 +1,10 @@
 package io.vertx.ext.stomp.lite.client;
 
+import io.vertx.core.Context;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
+import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpServer;
@@ -31,6 +33,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -515,6 +518,61 @@ public class StompClientTest {
 
         closed.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
         assertTrue(handler.sendFrames().isEmpty());
+    }
+
+    @Test
+    public void secondConnectWhileTheFirstIsPendingIsRejected() throws Exception {
+        // the handler holds the first CONNECT open until the test releases it
+        AtomicInteger connectCalls = new AtomicInteger();
+        CompletableFuture<Runnable> releaseFirstConnect = new CompletableFuture<>();
+        startServer(headers -> {
+            connectCalls.incrementAndGet();
+            Context context = Vertx.currentContext();
+            Promise<Map<String, String>> pending = Promise.promise();
+            releaseFirstConnect.complete(() -> context.runOnContext(v -> pending.tryComplete(Collections.emptyMap())));
+            return pending.future();
+        }, new StompServerOptions().setHeartbeat(new JsonObject().put("x", 100).put("y", 100)));
+        LinkedBlockingQueue<Frame> frames = new LinkedBlockingQueue<>();
+        CompletableFuture<Void> closed = new CompletableFuture<>();
+        WebSocket socket = openRawSocket(frames::add, closed);
+        Buffer connect = new Frame(Frame.Command.CONNECT,
+                                   Headers.create(Frame.ACCEPT_VERSION, "1.2", Frame.HOST, "localhost", Frame.HEARTBEAT, "100,100"),
+                                   null).toBuffer();
+
+        socket.writeBinaryMessage(connect);
+        Runnable release = releaseFirstConnect.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        socket.writeBinaryMessage(connect);
+
+        // the second CONNECT is answered with an ERROR and the connection closed, without reaching the handler
+        Frame error = frames.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        assertNotNull(error);
+        assertEquals(Frame.Command.ERROR, error.getCommand());
+        closed.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        handler.closedSignal().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        assertEquals(1, connectCalls.get());
+
+        // the first CONNECT completing after the close neither answers the client nor starts heartbeats
+        release.run();
+        assertNull(frames.poll(500, TimeUnit.MILLISECONDS));
+        assertEquals(1, connectCalls.get());
+    }
+
+    @Test
+    public void connectAfterConnectedIsRejected() throws Exception {
+        startServer(headers -> Future.succeededFuture(Collections.emptyMap()), new StompServerOptions());
+        LinkedBlockingQueue<Frame> frames = new LinkedBlockingQueue<>();
+        CompletableFuture<Void> closed = new CompletableFuture<>();
+        WebSocket socket = openRawSocket(frames::add, closed);
+        Buffer connect = new Frame(Frame.Command.CONNECT,
+                                   Headers.create(Frame.ACCEPT_VERSION, "1.2", Frame.HOST, "localhost"),
+                                   null).toBuffer();
+
+        socket.writeBinaryMessage(connect);
+        assertEquals(Frame.Command.CONNECTED, frames.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS).getCommand());
+        socket.writeBinaryMessage(connect);
+
+        assertEquals(Frame.Command.ERROR, frames.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS).getCommand());
+        closed.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
     }
 
     @Test
