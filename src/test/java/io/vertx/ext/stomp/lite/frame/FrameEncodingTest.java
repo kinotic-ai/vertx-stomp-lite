@@ -22,6 +22,8 @@ public class FrameEncodingTest {
         assertEquals("iso-8859-1", encodingOf("text/plain;charset=iso-8859-1"));
         assertEquals("UTF-16", encodingOf("text/plain;charset=UTF-16;format=flowed"));
         assertEquals("utf-16", encodingOf("text/plain;charset=iso-8859-1;charset=utf-16"));
+        assertEquals("utf-16", encodingOf("text/plain;charset=utf-16;charset="));
+        assertEquals("utf-16", encodingOf("text/plain;charset=utf-16;charset=;format=flowed"));
     }
 
     @Test(timeout = 2000)
@@ -30,6 +32,14 @@ public class FrameEncodingTest {
         String header = "a" + ";charset=a".repeat(20_000) + "\n";
 
         assertEquals("a", encodingOf(header));
+    }
+
+    @Test(timeout = 2000)
+    public void encodingOfAHeaderWithManyEmptyCharsetParametersIsReadInLinearTime() {
+        // every parameter is empty, so the backward search has to walk the whole header once
+        String header = "a" + ";charset=".repeat(20_000) + "\n";
+
+        assertEquals("utf-8", encodingOf(header));
     }
 
     private static String encodingOf(String contentType) {

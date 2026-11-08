@@ -433,29 +433,30 @@ public class Frame {
   }
 
   /**
-   * Finds the value of the last {@code ;charset=} parameter of a content-type, scanning the header once, so a header
-   * holding many such parameters costs time linear in its length. A regular expression with leading and trailing
-   * wildcards backtracked over every overlapping suffix instead, which a small crafted header could turn into
-   * seconds of CPU.
+   * Finds the value of the last {@code ;charset=} parameter of a content-type that names one. The header is searched
+   * from its end and the search stops at the first such parameter found, so a typical header is barely scanned and
+   * no header, however crafted, costs more than one pass over it. No regular expression is used, so nothing can
+   * backtrack, and only the returned charset is allocated.
    *
    * @return the charset, {@code null} if the header names none
    */
   static String charsetParameter(String contentType) {
-    String charset = null;
+    int length = contentType.length();
+    int index = contentType.lastIndexOf(CHARSET_PARAMETER);
     // the parameter must follow a media type, so a match at index 0 does not count
-    int index = contentType.indexOf(CHARSET_PARAMETER, 1);
-    while (index >= 0) {
+    while (index > 0) {
       int start = index + CHARSET_PARAMETER.length();
       int end = start;
-      while (end < contentType.length() && isCharsetChar(contentType.charAt(end))) {
+      while (end < length && isCharsetChar(contentType.charAt(end))) {
         end++;
       }
       if (end > start) {
-        charset = contentType.substring(start, end);
+        return contentType.substring(start, end);
       }
-      index = contentType.indexOf(CHARSET_PARAMETER, start);
+      // an empty value, as in ";charset=;": fall back to an earlier parameter
+      index = contentType.lastIndexOf(CHARSET_PARAMETER, index - 1);
     }
-    return charset;
+    return null;
   }
 
   private static boolean isCharsetChar(char c) {
