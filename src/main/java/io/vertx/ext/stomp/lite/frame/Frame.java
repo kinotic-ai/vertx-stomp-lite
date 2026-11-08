@@ -23,8 +23,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Represents a STOMP frame. STOMP frames are structured as follows. It starts by a {@code command}, followed by a
@@ -82,7 +80,7 @@ public class Frame {
    * Regex used to extract the body encoding that may be specified in the {@code content-type} header. By default,
    * UTF-8 is used.
    */
-  private final static Pattern CHARSET_PATTERN = Pattern.compile(".+;charset=([a-zA-Z0-9\\-]+);?.*");
+  private static final String CHARSET_PARAMETER = ";charset=";
 
   /**
    * The list of command defined by the STOMP specification.
@@ -429,13 +427,39 @@ public class Frame {
     if (header == null) {
       return UTF_8;
     } else {
-      final Matcher matcher = CHARSET_PATTERN.matcher(header);
-      if (matcher.matches()) {
-        return matcher.group(1);
-      } else {
-        return UTF_8;
-      }
+      String charset = charsetParameter(header);
+      return charset != null ? charset : UTF_8;
     }
+  }
+
+  /**
+   * Finds the value of the last {@code ;charset=} parameter of a content-type, scanning the header once, so a header
+   * holding many such parameters costs time linear in its length. A regular expression with leading and trailing
+   * wildcards backtracked over every overlapping suffix instead, which a small crafted header could turn into
+   * seconds of CPU.
+   *
+   * @return the charset, {@code null} if the header names none
+   */
+  static String charsetParameter(String contentType) {
+    String charset = null;
+    // the parameter must follow a media type, so a match at index 0 does not count
+    int index = contentType.indexOf(CHARSET_PARAMETER, 1);
+    while (index >= 0) {
+      int start = index + CHARSET_PARAMETER.length();
+      int end = start;
+      while (end < contentType.length() && isCharsetChar(contentType.charAt(end))) {
+        end++;
+      }
+      if (end > start) {
+        charset = contentType.substring(start, end);
+      }
+      index = contentType.indexOf(CHARSET_PARAMETER, start);
+    }
+    return charset;
+  }
+
+  private static boolean isCharsetChar(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-';
   }
 
   /**
