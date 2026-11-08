@@ -19,6 +19,8 @@ package io.vertx.ext.stomp.lite.frame;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.json.JsonObject;
 
+import java.nio.charset.Charset;
+import java.nio.charset.IllegalCharsetNameException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -418,7 +420,8 @@ public class Frame {
   }
 
   /**
-   * Read the frame encoding. If not set defaults to utf-8.
+   * Read the frame encoding: the content-type's charset when it names one this JVM supports, utf-8 otherwise, so
+   * the result can always decode the body.
    *
    * @return the encoding
    */
@@ -428,7 +431,16 @@ public class Frame {
       return UTF_8;
     } else {
       String charset = charsetParameter(header);
-      return charset != null ? charset : UTF_8;
+      return charset != null && isSupportedCharset(charset) ? charset : UTF_8;
+    }
+  }
+
+  private static boolean isSupportedCharset(String charset) {
+    try {
+      return Charset.isSupported(charset);
+    } catch (IllegalCharsetNameException e) {
+      // a name not shaped like a charset name, such as one starting with a hyphen
+      return false;
     }
   }
 

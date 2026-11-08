@@ -1,5 +1,6 @@
 package io.vertx.ext.stomp.lite.frame;
 
+import io.vertx.core.buffer.Buffer;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -15,6 +16,21 @@ public class FrameEncodingTest {
         assertEquals("utf-8", encodingOf("text/plain"));
         assertEquals("utf-8", encodingOf(";charset=iso-8859-1")); // no media type before the parameter
         assertEquals("utf-8", encodingOf("text/plain;charset="));
+    }
+
+    @Test
+    public void encodingDefaultsToUtf8ForACharsetTheJvmDoesNotSupport() {
+        assertEquals("utf-8", encodingOf("text/plain;charset=utf-99"));
+        assertEquals("utf-8", encodingOf("text/plain;charset=utf_8")); // read as "utf", which is no charset
+        assertEquals("utf-8", encodingOf("text/plain;charset=-utf-8")); // not even a legal charset name
+    }
+
+    @Test
+    public void bodyWithAnUnsupportedCharsetIsDecodedAsUtf8() {
+        Headers headers = Headers.create(Frame.CONTENT_TYPE, "text/plain;charset=utf-99");
+        Frame frame = new Frame(Frame.Command.SEND, headers, Buffer.buffer("h\u00e9llo", "utf-8"));
+
+        assertEquals("h\u00e9llo", frame.getBodyAsString());
     }
 
     @Test
