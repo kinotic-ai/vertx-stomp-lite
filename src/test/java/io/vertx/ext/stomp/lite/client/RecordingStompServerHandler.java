@@ -33,6 +33,7 @@ public class RecordingStompServerHandler extends AbstractStompServerHandler {
     private final CompletableFuture<Void> closed = new CompletableFuture<>();
     private final AtomicInteger closedCalls = new AtomicInteger();
     private volatile Runnable onClosed = () -> {};
+    private volatile Runnable onException = () -> {};
 
     public RecordingStompServerHandler(Supplier<Future<MultiMap>> handshakeAnswer,
                                        Function<Map<String, String>, Future<Map<String, String>>> connectAnswer) {
@@ -93,6 +94,7 @@ public class RecordingStompServerHandler extends AbstractStompServerHandler {
 
     @Override
     public void exception(Throwable t) {
+        onException.run();
     }
 
     @Override
@@ -143,6 +145,13 @@ public class RecordingStompServerHandler extends AbstractStompServerHandler {
      */
     public int closedCalls() {
         return closedCalls.get();
+    }
+
+    /**
+     * Runs the action inside {@link #exception(Throwable)}, on the connection's context.
+     */
+    public void onException(Runnable action) {
+        this.onException = action;
     }
 
     /**

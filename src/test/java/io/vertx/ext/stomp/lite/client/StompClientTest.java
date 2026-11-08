@@ -585,6 +585,35 @@ public class StompClientTest {
     }
 
     @Test
+    public void connectCompletedByTheHandlerWhileRejectingASecondConnectIsIgnored() throws Exception {
+        // a handler that completes the pending CONNECT from exception(), which the second CONNECT's rejection calls
+        CompletableFuture<Promise<Map<String, String>>> firstConnect = new CompletableFuture<>();
+        startServer(headers -> {
+            Promise<Map<String, String>> pending = Promise.promise();
+            firstConnect.complete(pending);
+            return pending.future();
+        }, new StompServerOptions());
+        LinkedBlockingQueue<Frame> frames = new LinkedBlockingQueue<>();
+        CompletableFuture<Void> closed = new CompletableFuture<>();
+        WebSocket socket = openRawSocket(frames::add, closed);
+        Buffer connect = new Frame(Frame.Command.CONNECT,
+                                   Headers.create(Frame.ACCEPT_VERSION, "1.2", Frame.HOST, "localhost"),
+                                   null).toBuffer();
+        socket.writeBinaryMessage(connect);
+        Promise<Map<String, String>> pending = firstConnect.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        handler.onException(() -> pending.tryComplete(Collections.emptyMap()));
+
+        socket.writeBinaryMessage(connect);
+
+        // the client gets the ERROR alone, never a CONNECTED ahead of it
+        Frame first = frames.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        assertNotNull(first);
+        assertEquals(Frame.Command.ERROR, first.getCommand());
+        closed.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        assertNull(frames.poll(300, TimeUnit.MILLISECONDS));
+    }
+
+    @Test
     public void connectAfterConnectedIsRejected() throws Exception {
         startServer(headers -> Future.succeededFuture(Collections.emptyMap()), new StompServerOptions());
         LinkedBlockingQueue<Frame> frames = new LinkedBlockingQueue<>();

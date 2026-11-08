@@ -155,6 +155,8 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
      * @param t the exception that was caused
      */
     public void clientCausedException(Throwable t){
+        // closing before the handler is told, so a pending CONNECT it completes from exception() sends nothing
+        closing = true;
         notifyException(t);
         close();
     }
@@ -166,6 +168,9 @@ class DefaultStompServerConnection implements Handler<Frame>, StompServerConnect
      * @param causingFrame the frame whose processing failed
      */
     public void clientCausedException(Throwable t, Frame causingFrame){
+        // closing before the handler is told, so a pending CONNECT it completes from exception() cannot answer with
+        // CONNECTED ahead of the ERROR frame
+        closing = true;
         notifyException(t);
         logIfFailed(sendErrorAndDisconnect(t, causingFrame),
                     "Problem sending ERROR frame to client");
