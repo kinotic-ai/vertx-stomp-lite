@@ -471,8 +471,10 @@ public class Frame {
     return null;
   }
 
+  // the characters java.nio.charset.Charset allows in a charset name, so an alias such as ISO_8859-1 is read whole
   private static boolean isCharsetChar(char c) {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-';
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+        || c == '-' || c == '+' || c == '.' || c == ':' || c == '_';
   }
 
   /**

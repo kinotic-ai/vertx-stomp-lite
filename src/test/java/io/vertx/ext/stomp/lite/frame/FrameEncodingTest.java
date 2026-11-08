@@ -21,7 +21,7 @@ public class FrameEncodingTest {
     @Test
     public void encodingDefaultsToUtf8ForACharsetTheJvmDoesNotSupport() {
         assertEquals("utf-8", encodingOf("text/plain;charset=utf-99"));
-        assertEquals("utf-8", encodingOf("text/plain;charset=utf_8")); // read as "utf", which is no charset
+        assertEquals("utf-8", encodingOf("text/plain;charset=utf_8")); // not an alias Java knows
         assertEquals("utf-8", encodingOf("text/plain;charset=-utf-8")); // not even a legal charset name
     }
 
@@ -40,6 +40,17 @@ public class FrameEncodingTest {
         assertEquals("utf-16", encodingOf("text/plain;charset=iso-8859-1;charset=utf-16"));
         assertEquals("utf-16", encodingOf("text/plain;charset=utf-16;charset="));
         assertEquals("utf-16", encodingOf("text/plain;charset=utf-16;charset=;format=flowed"));
+        // every character Java allows in a charset name is read, so these aliases are kept whole
+        assertEquals("ISO_8859-1", encodingOf("text/plain;charset=ISO_8859-1"));
+        assertEquals("ISO_8859-1:1987", encodingOf("text/plain;charset=ISO_8859-1:1987;format=flowed"));
+    }
+
+    @Test
+    public void bodyIsDecodedWithACharsetNamedByAnAlias() {
+        Headers headers = Headers.create(Frame.CONTENT_TYPE, "text/plain;charset=ISO_8859-1");
+        Frame frame = new Frame(Frame.Command.SEND, headers, Buffer.buffer("h\u00e9llo", "ISO-8859-1"));
+
+        assertEquals("h\u00e9llo", frame.getBodyAsString());
     }
 
     private static String encodingOf(String contentType) {
